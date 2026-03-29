@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useDashboardStats } from "@/hooks/useDashboardStats";
 import {
   Phone,
   Users,
@@ -40,47 +41,17 @@ import {
 } from "recharts";
 
 // ── data ───────────────────────────────────────────────
-const callData = [
-  { name: "Mon", calls: 1200, conversions: 180, revenue: 12400 },
-  { name: "Tue", calls: 1800, conversions: 240, revenue: 18200 },
-  { name: "Wed", calls: 1500, conversions: 210, revenue: 15800 },
-  { name: "Thu", calls: 2200, conversions: 310, revenue: 24600 },
-  { name: "Fri", calls: 1900, conversions: 280, revenue: 21200 },
-  { name: "Sat", calls: 800, conversions: 90, revenue: 7800 },
-  { name: "Sun", calls: 600, conversions: 70, revenue: 5400 },
-];
+// Removing hardcoded data to use data from useDashboardStats()
 
-const agentPerformance = [
-  { name: "Real Estate", active: 12, leads: 340, conversion: 18.2 },
-  { name: "Finance", active: 8, leads: 220, conversion: 15.8 },
-  { name: "Medical", active: 6, leads: 180, conversion: 22.1 },
-  { name: "Insurance", active: 10, leads: 290, conversion: 14.5 },
-  { name: "Home Imp.", active: 5, leads: 150, conversion: 19.3 },
-];
-
-const channelData = [
-  { name: "Voice", value: 45, fill: "hsl(170, 100%, 45%)" },
-  { name: "SMS", value: 25, fill: "hsl(200, 80%, 55%)" },
-  { name: "WhatsApp", value: 20, fill: "hsl(280, 70%, 60%)" },
-  { name: "Email", value: 10, fill: "hsl(45, 90%, 55%)" },
-];
-
-const liveAgents = [
-  { id: 1, name: "Agent Nova", status: "on-call", lead: "James M.", geo: "🇺🇸 NY", duration: "2:34", campaign: "Home Refi Q1" },
-  { id: 2, name: "Agent Pulse", status: "on-call", lead: "Sarah C.", geo: "🇨🇦 Toronto", duration: "5:12", campaign: "Insurance Shield" },
-  { id: 3, name: "Agent Vox", status: "idle", lead: "—", geo: "—", duration: "—", campaign: "Standby" },
-  { id: 4, name: "Agent Spark", status: "on-call", lead: "David P.", geo: "🇰🇷 Seoul", duration: "1:48", campaign: "Auto Deals" },
-  { id: 5, name: "Agent Echo", status: "processing", lead: "Aisha M.", geo: "🇦🇪 Dubai", duration: "—", campaign: "RE Investment" },
-];
-
-const recentActivity = [
-  { icon: Zap, action: "AI Agent deployed", detail: "Insurance Lead Gen Bot #12 now live", time: "2 min ago", type: "success" as const },
-  { icon: TrendingUp, action: "Conversion spike detected", detail: "Real Estate Q1 — +34% vs last hour", time: "8 min ago", type: "success" as const },
-  { icon: Users, action: "High-value lead captured", detail: "Aisha M. — $1.2M budget, RE Investment", time: "15 min ago", type: "info" as const },
-  { icon: Bot, action: "Agent learning complete", detail: "Agent Nova retrained on 2,400 new calls", time: "32 min ago", type: "neutral" as const },
-  { icon: Globe, action: "New geo activated", detail: "AI Agents now covering Dubai, AE market", time: "1 hr ago", type: "info" as const },
-  { icon: DollarSign, action: "Revenue milestone", detail: "Crossed $125K weekly revenue target", time: "2 hrs ago", type: "success" as const },
-];
+const iconMap: Record<string, React.ElementType> = {
+  TrendingUp,
+  Phone,
+  Zap,
+  Users,
+  Bot,
+  Globe,
+  DollarSign
+};
 
 const activityTypeColor = {
   success: "text-primary",
@@ -191,6 +162,7 @@ function AIHealthGauge() {
 
 // ── main component ─────────────────────────────────────
 const Dashboard = () => {
+  const { data, isLoading } = useDashboardStats();
   const [timeframe, setTimeframe] = useState<TimeframePreset>("7d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
   const [gmtTime, setGmtTime] = useState("");
@@ -205,6 +177,12 @@ const Dashboard = () => {
     const id = setInterval(tick, 60000);
     return () => clearInterval(id);
   }, []);
+
+  if (isLoading || !data) {
+    return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading real-time metrics...</div>;
+  }
+
+  const { stats, callData, agentPerformance, channelData, liveAgents, recentActivity } = data;
 
   const tooltipStyle = {
     backgroundColor: "hsl(220, 18%, 10%)",
@@ -241,7 +219,7 @@ const Dashboard = () => {
               Welcome back<span className="text-gradient-cyan">,</span>
             </h1>
             <p className="text-muted-foreground mt-1.5 text-sm max-w-md">
-              Your AI workforce is performing above targets. <span className="text-primary font-medium">41 agents</span> are actively generating leads across <span className="text-primary font-medium">5 industries</span>.
+              Your AI workforce is performing above targets. <span className="text-primary font-medium">{stats.aiAgentsCount} agents</span> are actively generating leads across <span className="text-primary font-medium">{agentPerformance.length} industries</span>.
             </p>
           </div>
 
@@ -276,12 +254,12 @@ const Dashboard = () => {
 
       {/* ── KPI Stats ──────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <AnimatedStatCard title="Total Calls" value={24580} change="+12.5% from last week" changeType="up" icon={Phone} delay={100} />
-        <AnimatedStatCard title="Active Leads" value={3420} change="+8.2% from last week" changeType="up" icon={Users} delay={200} />
-        <AnimatedStatCard title="Conversion" value={14} suffix="%" change="+2.1% from last week" changeType="up" icon={TrendingUp} delay={300} />
-        <AnimatedStatCard title="Revenue" value={128} prefix="$" suffix="K" change="+18.3% from last week" changeType="up" icon={DollarSign} delay={400} glowing />
-        <AnimatedStatCard title="AI Agents" value={41} change="3 deploying" changeType="neutral" icon={Bot} delay={500} />
-        <AnimatedStatCard title="Avg Response" value={1} suffix=".8s" change="-0.3s improvement" changeType="up" icon={Clock} delay={600} />
+        <AnimatedStatCard title="Total Calls" value={stats.totalCalls} change="+12.5% from last week" changeType="up" icon={Phone} delay={100} />
+        <AnimatedStatCard title="Active Leads" value={stats.activeLeads} change="+8.2% from last week" changeType="up" icon={Users} delay={200} />
+        <AnimatedStatCard title="Conversion" value={stats.conversion} suffix="%" change="+2.1% from last week" changeType="up" icon={TrendingUp} delay={300} />
+        <AnimatedStatCard title="Revenue" value={Math.round(stats.revenue / 1000)} prefix="$" suffix="K" change="+18.3% from last week" changeType="up" icon={DollarSign} delay={400} glowing />
+        <AnimatedStatCard title="AI Agents" value={stats.aiAgentsCount} change="3 deploying" changeType="neutral" icon={Bot} delay={500} />
+        <AnimatedStatCard title="Avg Response" value={stats.avgResponseTime} suffix="s" change="-0.3s improvement" changeType="up" icon={Clock} delay={600} />
       </div>
 
       {/* ── Charts Row ─────────────────────────────────── */}
@@ -448,8 +426,11 @@ const Dashboard = () => {
           <Badge variant="outline" className="text-[10px] text-muted-foreground">Auto-updating</Badge>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {recentActivity.length === 0 && (
+            <div className="col-span-2 text-sm text-muted-foreground py-4">No recent activity found.</div>
+          )}
           {recentActivity.map((item, i) => {
-            const Icon = item.icon;
+            const Icon = iconMap[item.icon] || Activity;
             return (
               <div
                 key={i}

@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import Papa from "papaparse";
 import { Plus, Clock, Users, Globe, Briefcase, Bot, Upload, FileSpreadsheet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -116,10 +117,41 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
       crmApiEndpoint: crmEndpoint.trim(),
     };
 
-    onCreated(newCampaign);
-    toast.success(`Campaign "${newCampaign.name}" created`);
-    resetForm();
-    setOpen(false);
+    if (uploadedFile) {
+      Papa.parse(uploadedFile, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const parsedData = results.data as any[];
+          
+          const mockRecords = parsedData.map((row, i) => ({
+            id: crypto.randomUUID(),
+            name: row.Name || row.name || `Imported Lead ${i + 1}`,
+            phone: row.Phone || row.phone || "",
+            email: row.Email || row.email || "",
+            status: "pending",
+            duration: "—",
+            callDate: "—",
+            hasRecording: false,
+            notes: row.Notes || row.notes || "Imported via CSV",
+            agent
+          })).filter(record => record.phone || record.email);
+          
+          newCampaign.records = mockRecords;
+          
+          onCreated(newCampaign);
+          resetForm();
+          setOpen(false);
+        },
+        error: (error: any) => {
+          toast.error(`Failed to parse CSV: ${error.message}`);
+        }
+      });
+    } else {
+      onCreated(newCampaign);
+      resetForm();
+      setOpen(false);
+    }
   };
 
   return (

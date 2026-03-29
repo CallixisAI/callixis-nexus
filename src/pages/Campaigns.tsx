@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Papa from "papaparse";
 import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -46,7 +47,7 @@ const initialCampaigns: Campaign[] = [
 ];
 
 const Campaigns = () => {
-  const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign } = useCampaigns();
+  const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign, addCallRecords } = useCampaigns();
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedCampaignForUpload, setSelectedCampaignForUpload] = useState<string>("");
@@ -54,13 +55,50 @@ const Campaigns = () => {
   const [timeframe, setTimeframe] = useState<TimeframePreset>("30d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Keep placeholder behavior for file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    toast.success(`Mock contacts added to campaign.`);
-    setUploadDialogOpen(false);
-    setSelectedCampaignForUpload("");
+    if (!file || !selectedCampaignForUpload) return;
+    
+    toast.info("Processing file...");
+    
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        const parsedData = results.data as any[];
+        
+        if (parsedData.length === 0) {
+          toast.error("File is empty or could not be parsed.");
+          return;
+        }
+
+        const mockRecords = parsedData.map((row, i) => ({
+          name: row.Name || row.name || `Imported Lead ${i + 1}`,
+          phone: row.Phone || row.phone || "",
+          email: row.Email || row.email || "",
+          notes: row.Notes || row.notes || "Imported via CSV"
+        })).filter(record => record.phone || record.email);
+
+        if (mockRecords.length === 0) {
+          toast.error("No valid contacts found. Please check columns (Name, Phone, Email).");
+          return;
+        }
+
+        try {
+          await addCallRecords({ campaignId: selectedCampaignForUpload, records: mockRecords });
+          toast.success(`Successfully imported ${mockRecords.length} contacts!`);
+        } catch (error: any) {
+          toast.error(`Failed to import records: ${error.message}`);
+        } finally {
+          setUploadDialogOpen(false);
+          setSelectedCampaignForUpload("");
+          if (e.target) e.target.value = '';
+        }
+      },
+      error: (error: any) => {
+        toast.error(`Failed to parse CSV: ${error.message}`);
+      }
+    });
   };
 
   const toggleRecording = (recordId: string) => {
@@ -92,7 +130,12 @@ const Campaigns = () => {
 
   const handleCreate = async (c: Campaign) => {
     try {
-      await createCampaign(c);
+      const createdCampaign = await createCampaign(c);
+      
+      if (c.records && c.records.length > 0 && createdCampaign?.id) {
+        await addCallRecords({ campaignId: createdCampaign.id, records: c.records });
+      }
+      
       toast.success("Campaign stored securely!");
     } catch (err: any) {
       toast.error(`Failed to save: ${err?.message}`);
@@ -244,7 +287,7 @@ const Campaigns = () => {
                       <TabsTrigger value="pending" className="text-xs">Pending ({campaign.records.filter(r => r.status === "pending").length})</TabsTrigger>
                       <TabsTrigger value="failed" className="text-xs">Failed ({campaign.records.filter(r => ["failed", "no-answer"].includes(r.status)).length})</TabsTrigger>
                     </TabsList>
-                    <Button variant="outline" size="sm" className="border-border text-xs" onClick={(e) => { e.stopPropagation(); setSelectedCampaignForUpload(campaign.id); setUploadDialogOpen(true); }}>
+                    <Button variant="outline" size="sm" className="border-border text-xs" onClick={(e) => { e.stopPropagation(); e.preventDefault(); setSelectedCampaignForUpload(campaign.id); setUploadDialogOpen(true); }}>
                       <Upload className="h-3 w-3 mr-1" />Add Data
                     </Button>
                   </div>
