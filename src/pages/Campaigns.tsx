@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Papa from "papaparse";
-import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio } from "lucide-react";
+import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio, Download, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -47,13 +47,26 @@ const initialCampaigns: Campaign[] = [
 ];
 
 const Campaigns = () => {
-  const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign, addCallRecords } = useCampaigns();
+  const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign, addCallRecords, deleteCampaign, deleteCallRecord } = useCampaigns();
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedCampaignForUpload, setSelectedCampaignForUpload] = useState<string>("");
   const [playingRecording, setPlayingRecording] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<TimeframePreset>("30d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
+
+  const downloadExampleCSV = () => {
+    const csvContent = "Country Code,Name,Surname,Email,Phone,Source,Notes\n+1,John,Smith,john@example.com,555-0199,Website,Interested in mortgage\n+44,Jane,Doe,jane@example.co.uk,7700 900123,Google Ads,Follow up next week";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "callixis_leads_example.csv");
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -73,14 +86,14 @@ const Campaigns = () => {
         }
 
         const mockRecords = parsedData.map((row, i) => ({
-          name: row.Name || row.name || `Imported Lead ${i + 1}`,
+          name: `${row.Name || row.name || ""} ${row.Surname || row.surname || ""}`.trim() || `Imported Lead ${i + 1}`,
           phone: row.Phone || row.phone || "",
           email: row.Email || row.email || "",
-          notes: row.Notes || row.notes || "Imported via CSV"
+          notes: `${row.Source || row.source ? `Source: ${row.Source || row.source}. ` : ""}${row.Notes || row.notes || "Imported via CSV"}`
         })).filter(record => record.phone || record.email);
 
         if (mockRecords.length === 0) {
-          toast.error("No valid contacts found. Please check columns (Name, Phone, Email).");
+          toast.error("No valid contacts found. Please check columns (Name, Surname, Phone, Email).");
           return;
         }
 
@@ -99,6 +112,26 @@ const Campaigns = () => {
         toast.error(`Failed to parse CSV: ${error.message}`);
       }
     });
+  };
+
+  const handleDeleteCampaign = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete campaign "${name}"? This will also delete all associated leads.`)) return;
+    try {
+      await deleteCampaign(id);
+      toast.success("Campaign deleted");
+    } catch (err: any) {
+      toast.error(`Failed to delete: ${err.message}`);
+    }
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this lead?")) return;
+    try {
+      await deleteCallRecord(id);
+      toast.success("Lead deleted");
+    } catch (err: any) {
+      toast.error(`Failed to delete lead: ${err.message}`);
+    }
   };
 
   const toggleRecording = (recordId: string) => {
@@ -180,8 +213,13 @@ const Campaigns = () => {
                   </div>
                 </div>
                 <div className="bg-secondary/50 rounded-lg p-3 border border-border">
-                  <p className="text-xs text-muted-foreground font-medium mb-1">Expected columns:</p>
-                  <p className="text-xs text-muted-foreground">Name, Phone, Email, Notes (optional)</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs text-muted-foreground font-medium">Expected columns:</p>
+                    <Button variant="link" size="sm" className="h-auto p-0 text-[10px] text-primary" onClick={downloadExampleCSV}>
+                      <Download className="h-2.5 w-2.5 mr-1" />Download Example
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Country Code, Name, Surname, Email, Phone, Source, Notes</p>
                 </div>
               </div>
             </DialogContent>
@@ -274,6 +312,16 @@ const Campaigns = () => {
                 <p className="text-sm text-foreground">{campaign.records.length}</p>
                 <p className="text-xs text-muted-foreground">contacts</p>
               </div>
+              
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                onClick={(e) => { e.stopPropagation(); handleDeleteCampaign(campaign.id, campaign.name); }}
+                title="Delete campaign"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             </div>
 
             {/* Expanded Call Records */}
@@ -306,6 +354,7 @@ const Campaigns = () => {
                               <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">Date</th>
                               <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden xl:table-cell">Notes</th>
                               <th className="text-left text-xs font-medium text-muted-foreground p-3">Recording</th>
+                              <th className="p-3 w-10"></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -343,6 +392,17 @@ const Campaigns = () => {
                                         <span className="text-xs text-muted-foreground">—</span>
                                       )}
                                     </td>
+                                    <td className="p-3 text-right">
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(record.id); }}
+                                        title="Delete lead"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </td>
                                   </tr>
                                 );
                               })}
@@ -354,7 +414,7 @@ const Campaigns = () => {
                               return true;
                             }).length === 0 && (
                               <tr>
-                                <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
+                                <td colSpan={9} className="p-8 text-center text-sm text-muted-foreground">
                                   No records found. Upload data to get started.
                                 </td>
                               </tr>

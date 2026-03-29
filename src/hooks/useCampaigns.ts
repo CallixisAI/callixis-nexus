@@ -206,6 +206,42 @@ export function useCampaigns() {
     },
   });
 
+  const deleteCampaignMutation = useMutation({
+    mutationFn: async (id: string) => {
+      // First delete associated call records
+      await supabase
+        .from('call_records')
+        .delete()
+        .eq('campaign_id', id);
+
+      const { error } = await supabase
+        .from('campaigns')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+        
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns', userId] });
+    },
+  });
+
+  const deleteCallRecordMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from('call_records')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+        
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns', userId] });
+    },
+  });
+
   return {
     campaigns,
     isLoading,
@@ -214,5 +250,7 @@ export function useCampaigns() {
     createCampaign: createMutation.mutateAsync,
     updateCampaign: updateMutation.mutateAsync,
     addCallRecords: addCallRecordsMutation.mutateAsync,
+    deleteCampaign: deleteCampaignMutation.mutateAsync,
+    deleteCallRecord: deleteCallRecordMutation.mutateAsync,
   };
 }
