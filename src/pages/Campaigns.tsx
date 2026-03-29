@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Papa from "papaparse";
-import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio, Download, Trash2 } from "lucide-react";
+import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio, Download, Trash2, Search, Filter } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -27,25 +28,6 @@ const callStatusIcons: Record<string, { icon: React.ElementType; color: string; 
 
 const defaultWorkHours = { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" };
 
-const sampleRecords: CallRecord[] = [
-  { id: "1", name: "John Smith", phone: "+1 (555) 234-5678", email: "john@realty.com", status: "completed", duration: "3:24", callDate: "2025-03-22 10:15", hasRecording: true, notes: "Interested in listing. Follow up next week.", agent: "LeadGen Pro" },
-  { id: "2", name: "Maria Garcia", phone: "+1 (555) 345-6789", email: "maria.g@email.com", status: "no-answer", duration: "0:00", callDate: "2025-03-22 10:18", hasRecording: false, notes: "", agent: "LeadGen Pro" },
-  { id: "3", name: "Robert Chen", phone: "+1 (555) 456-7890", email: "rchen@properties.com", status: "voicemail", duration: "0:32", callDate: "2025-03-22 10:22", hasRecording: true, notes: "Left voicemail with callback info.", agent: "LeadGen Pro" },
-  { id: "4", name: "Sarah Johnson", phone: "+1 (555) 567-8901", email: "sarah.j@mail.com", status: "callback", duration: "1:45", callDate: "2025-03-22 10:30", hasRecording: true, notes: "Requested callback at 3 PM.", agent: "LeadGen Pro" },
-  { id: "5", name: "David Wilson", phone: "+1 (555) 678-9012", email: "dwilson@email.com", status: "completed", duration: "5:12", callDate: "2025-03-22 10:35", hasRecording: true, notes: "Booked appointment for property viewing.", agent: "LeadGen Pro" },
-  { id: "6", name: "Emily Brown", phone: "+1 (555) 789-0123", email: "emily.b@gmail.com", status: "pending", duration: "—", callDate: "—", hasRecording: false, notes: "", agent: "LeadGen Pro" },
-  { id: "7", name: "Michael Davis", phone: "+1 (555) 890-1234", email: "mdavis@outlook.com", status: "failed", duration: "0:03", callDate: "2025-03-22 11:00", hasRecording: false, notes: "Invalid number.", agent: "LeadGen Pro" },
-  { id: "8", name: "Lisa Anderson", phone: "+1 (555) 901-2345", email: "lisa.a@realestate.com", status: "in-progress", duration: "2:10", callDate: "2025-03-22 11:05", hasRecording: false, notes: "Currently on call.", agent: "LeadGen Pro" },
-];
-
-const initialCampaigns: Campaign[] = [
-  { id: "1", name: "Real Estate Q1 Outreach", status: "Active", calls: 12400, conversion: "16.2%", industry: "Real Estate", agent: "LeadGen Pro", records: sampleRecords, workHours: defaultWorkHours, maxQualifiedLeads: 500, qualifiedLeadsSent: 142, crmApiEndpoint: "https://crm.example.com/api/leads" },
-  { id: "2", name: "Insurance Lead Gen", status: "Active", calls: 8300, conversion: "12.8%", industry: "Insurance", agent: "InsureBot", records: sampleRecords.slice(0, 5), workHours: defaultWorkHours, maxQualifiedLeads: 300, qualifiedLeadsSent: 87, crmApiEndpoint: "" },
-  { id: "3", name: "Medical Appointments", status: "Paused", calls: 5600, conversion: "22.1%", industry: "Medical", agent: "MedScheduler", records: sampleRecords.slice(0, 3), workHours: { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "08:00", endTime: "16:00" }, maxQualifiedLeads: 200, qualifiedLeadsSent: 200, crmApiEndpoint: "https://medical-crm.io/webhook" },
-  { id: "4", name: "Auto Dealership Follow-up", status: "Active", calls: 3200, conversion: "9.4%", industry: "Car Sales", agent: "AutoSales AI", records: sampleRecords.slice(0, 4), workHours: { days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], startTime: "10:00", endTime: "19:00" }, maxQualifiedLeads: 0, qualifiedLeadsSent: 45, crmApiEndpoint: "" },
-  { id: "5", name: "Home Improvement Summer", status: "Scheduled", calls: 0, conversion: "—", industry: "Home Improvement", agent: "HomeReno Bot", records: [], workHours: defaultWorkHours, maxQualifiedLeads: 100, qualifiedLeadsSent: 0, crmApiEndpoint: "" },
-];
-
 const Campaigns = () => {
   const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign, addCallRecords, deleteCampaign, deleteCallRecord } = useCampaigns();
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
@@ -54,6 +36,58 @@ const Campaigns = () => {
   const [playingRecording, setPlayingRecording] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<TimeframePreset>("30d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
+  
+  // Bulk selection and filters
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState<{ name?: string; phone?: string; email?: string; status?: string }>({});
+
+  // Reset selections when campaign changes
+  const handleCampaignClick = (campaignId: string) => {
+    setExpandedCampaign(expandedCampaign === campaignId ? null : campaignId);
+    setSelectedLeadIds(new Set()); // Clear selection when switching campaigns
+    setFilters({}); // Clear filters when switching campaigns
+  };
+
+  const toggleSelectLead = (id: string) => {
+    const newSelected = new Set(selectedLeadIds);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+    setSelectedLeadIds(newSelected);
+  };
+
+  const toggleSelectAll = (recordIds: string[]) => {
+    if (selectedLeadIds.size === recordIds.length && recordIds.every(id => selectedLeadIds.has(id))) {
+      setSelectedLeadIds(new Set());
+    } else {
+      setSelectedLeadIds(new Set(recordIds));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedLeadIds.size === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selectedLeadIds.size} leads?`)) return;
+    
+    try {
+      const idsToDelete = Array.from(selectedLeadIds);
+      for (const id of idsToDelete) {
+        await deleteCallRecord(id);
+      }
+      toast.success(`Deleted ${selectedLeadIds.size} leads`);
+      setSelectedLeadIds(new Set());
+    } catch (err: any) {
+      toast.error(`Failed to delete: ${err.message}`);
+    }
+  };
+
+  const getFilteredRecords = (records: CallRecord[]) => {
+    return records.filter(r => {
+      const matchesName = !filters.name || r.name.toLowerCase().includes(filters.name.toLowerCase());
+      const matchesPhone = !filters.phone || r.phone.includes(filters.phone);
+      const matchesEmail = !filters.email || r.email.toLowerCase().includes(filters.email.toLowerCase());
+      const matchesStatus = !filters.status || r.status === filters.status;
+      return matchesName && matchesPhone && matchesEmail && matchesStatus;
+    });
+  };
 
   const downloadExampleCSV = () => {
     const csvContent = "Country Code,Name,Surname,Email,Phone,Source,Notes\n+1,John,Smith,john@example.com,555-0199,Website,Interested in mortgage\n+44,Jane,Doe,jane@example.co.uk,7700 900123,Google Ads,Follow up next week";
@@ -114,26 +148,6 @@ const Campaigns = () => {
     });
   };
 
-  const handleDeleteCampaign = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete campaign "${name}"? This will also delete all associated leads.`)) return;
-    try {
-      await deleteCampaign(id);
-      toast.success("Campaign deleted");
-    } catch (err: any) {
-      toast.error(`Failed to delete: ${err.message}`);
-    }
-  };
-
-  const handleDeleteLead = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this lead?")) return;
-    try {
-      await deleteCallRecord(id);
-      toast.success("Lead deleted");
-    } catch (err: any) {
-      toast.error(`Failed to delete lead: ${err.message}`);
-    }
-  };
-
   const toggleRecording = (recordId: string) => {
     setPlayingRecording(prev => (prev === recordId ? null : recordId));
   };
@@ -152,8 +166,6 @@ const Campaigns = () => {
 
   const updateCampaignSettings = async (id: string, updates: Partial<Campaign>) => {
     try {
-      // In a full implementation, you'd save 'workHours' and 'crmApiEndpoint' too.
-      // We only mapped status to supabase for this quick pass.
       await updateDBCampaign({ id, updates });
       toast.success(`Settings updated`);
     } catch (err: any) {
@@ -172,6 +184,26 @@ const Campaigns = () => {
       toast.success("Campaign stored securely!");
     } catch (err: any) {
       toast.error(`Failed to save: ${err?.message}`);
+    }
+  };
+
+  const handleDeleteCampaign = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete campaign "${name}"? This will also delete all associated leads.`)) return;
+    try {
+      await deleteCampaign(id);
+      toast.success("Campaign deleted");
+    } catch (err: any) {
+      toast.error(`Failed to delete: ${err.message}`);
+    }
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this lead?")) return;
+    try {
+      await deleteCallRecord(id);
+      toast.success("Lead deleted");
+    } catch (err: any) {
+      toast.error(`Failed to delete lead: ${err.message}`);
     }
   };
 
@@ -240,7 +272,7 @@ const Campaigns = () => {
             {/* Campaign Row */}
             <div
               className="flex items-center gap-4 p-4 cursor-pointer hover:bg-secondary/30 transition-colors"
-              onClick={() => setExpandedCampaign(expandedCampaign === campaign.id ? null : campaign.id)}
+              onClick={() => handleCampaignClick(campaign.id)}
             >
               <div className="text-muted-foreground">
                 {expandedCampaign === campaign.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -326,104 +358,161 @@ const Campaigns = () => {
 
             {/* Expanded Call Records */}
             {expandedCampaign === campaign.id && (
-              <div className="border-t border-border">
+              <div className="border-t border-border" key={campaign.id}>
                 <Tabs defaultValue="all" className="w-full">
                   <div className="flex items-center justify-between px-4 pt-3 flex-wrap gap-2">
-                    <TabsList className="bg-secondary">
-                      <TabsTrigger value="all" className="text-xs">All ({campaign.records.length})</TabsTrigger>
-                      <TabsTrigger value="completed" className="text-xs">Completed ({campaign.records.filter(r => r.status === "completed").length})</TabsTrigger>
-                      <TabsTrigger value="pending" className="text-xs">Pending ({campaign.records.filter(r => r.status === "pending").length})</TabsTrigger>
-                      <TabsTrigger value="failed" className="text-xs">Failed ({campaign.records.filter(r => ["failed", "no-answer"].includes(r.status)).length})</TabsTrigger>
-                    </TabsList>
+                    <div className="flex items-center gap-4">
+                      <TabsList className="bg-secondary">
+                        <TabsTrigger value="all" className="text-xs">All ({campaign.records.length})</TabsTrigger>
+                        <TabsTrigger value="completed" className="text-xs">Completed ({campaign.records.filter(r => r.status === "completed").length})</TabsTrigger>
+                        <TabsTrigger value="pending" className="text-xs">Pending ({campaign.records.filter(r => r.status === "pending").length})</TabsTrigger>
+                        <TabsTrigger value="failed" className="text-xs">Failed ({campaign.records.filter(r => ["failed", "no-answer"].includes(r.status)).length})</TabsTrigger>
+                      </TabsList>
+                      
+                      {selectedLeadIds.size > 0 && (
+                        <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2">
+                          <span className="text-xs font-medium text-primary">{selectedLeadIds.size} selected</span>
+                          <Button variant="destructive" size="sm" className="h-7 text-xs gap-1" onClick={handleBulkDelete}>
+                            <Trash2 className="h-3 w-3" /> Delete Selected
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    
                     <Button variant="outline" size="sm" className="border-border text-xs" onClick={(e) => { e.stopPropagation(); e.preventDefault(); setSelectedCampaignForUpload(campaign.id); setUploadDialogOpen(true); }}>
                       <Upload className="h-3 w-3 mr-1" />Add Data
                     </Button>
                   </div>
 
-                  {["all", "completed", "pending", "failed"].map(tab => (
-                    <TabsContent key={tab} value={tab} className="mt-0">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead>
-                            <tr className="border-b border-border">
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3 pl-4">Name</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3">Phone</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden md:table-cell">Email</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3">Status</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">Duration</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">Date</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden xl:table-cell">Notes</th>
-                              <th className="text-left text-xs font-medium text-muted-foreground p-3">Recording</th>
-                              <th className="p-3 w-10"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {campaign.records
-                              .filter(r => {
-                                if (tab === "all") return true;
-                                if (tab === "completed") return r.status === "completed";
-                                if (tab === "pending") return r.status === "pending" || r.status === "in-progress";
-                                if (tab === "failed") return r.status === "failed" || r.status === "no-answer";
-                                return true;
-                              })
-                              .map((record) => {
-                                const statusConf = callStatusIcons[record.status];
-                                const StatusIcon = statusConf.icon;
-                                return (
-                                  <tr key={record.id} className="border-b border-border last:border-0 hover:bg-secondary/30 transition-colors">
-                                    <td className="p-3 pl-4"><p className="text-sm text-foreground font-medium">{record.name}</p></td>
-                                    <td className="p-3 text-sm text-muted-foreground">{record.phone}</td>
-                                    <td className="p-3 text-sm text-muted-foreground hidden md:table-cell">{record.email}</td>
-                                    <td className="p-3">
-                                      <div className="flex items-center gap-1.5">
-                                        <StatusIcon className={`h-3.5 w-3.5 ${statusConf.color}`} />
-                                        <span className={`text-xs ${statusConf.color}`}>{statusConf.label}</span>
-                                      </div>
-                                    </td>
-                                    <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell">{record.duration}</td>
-                                    <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell whitespace-nowrap">{record.callDate}</td>
-                                    <td className="p-3 text-xs text-muted-foreground hidden xl:table-cell max-w-[200px] truncate">{record.notes || "—"}</td>
-                                    <td className="p-3">
-                                      {record.hasRecording ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); toggleRecording(record.id); }}>
-                                          {playingRecording === record.id ? <Pause className="h-3.5 w-3.5 text-primary" /> : <Play className="h-3.5 w-3.5 text-primary" />}
-                                        </Button>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">—</span>
-                                      )}
-                                    </td>
-                                    <td className="p-3 text-right">
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(record.id); }}
-                                        title="Delete lead"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            {campaign.records.filter(r => {
-                              if (tab === "all") return true;
-                              if (tab === "completed") return r.status === "completed";
-                              if (tab === "pending") return r.status === "pending" || r.status === "in-progress";
-                              if (tab === "failed") return r.status === "failed" || r.status === "no-answer";
-                              return true;
-                            }).length === 0 && (
-                              <tr>
-                                <td colSpan={9} className="p-8 text-center text-sm text-muted-foreground">
-                                  No records found. Upload data to get started.
-                                </td>
+                  {["all", "completed", "pending", "failed"].map(tab => {
+                    const tabRecords = campaign.records.filter(r => {
+                      if (tab === "all") return true;
+                      if (tab === "completed") return r.status === "completed";
+                      if (tab === "pending") return r.status === "pending" || r.status === "in-progress";
+                      if (tab === "failed") return r.status === "failed" || r.status === "no-answer";
+                      return true;
+                    });
+                    
+                    const filteredRecords = getFilteredRecords(tabRecords);
+                    const allFilteredIds = filteredRecords.map(r => r.id);
+                    const isAllSelected = filteredRecords.length > 0 && filteredRecords.every(r => selectedLeadIds.has(r.id));
+
+                    return (
+                      <TabsContent key={tab} value={tab} className="mt-0">
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead>
+                              <tr className="border-b border-border bg-muted/30">
+                                <th className="p-3 pl-4 w-10 text-left">
+                                  <Checkbox 
+                                    checked={isAllSelected} 
+                                    onCheckedChange={() => toggleSelectAll(allFilteredIds)}
+                                  />
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3">
+                                  <div className="flex flex-col gap-1.5">
+                                    <span>Name</span>
+                                    <div className="relative">
+                                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                                      <Input 
+                                        placeholder="Filter..." 
+                                        className="h-6 text-[10px] pl-6 bg-background border-border w-24"
+                                        value={filters.name || ""}
+                                        onChange={(e) => setFilters({...filters, name: e.target.value})}
+                                      />
+                                    </div>
+                                  </div>
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3">
+                                  <div className="flex flex-col gap-1.5">
+                                    <span>Phone</span>
+                                    <Input 
+                                      placeholder="Filter..." 
+                                      className="h-6 text-[10px] px-2 bg-background border-border w-24"
+                                      value={filters.phone || ""}
+                                      onChange={(e) => setFilters({...filters, phone: e.target.value})}
+                                    />
+                                  </div>
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden md:table-cell">
+                                  <div className="flex flex-col gap-1.5">
+                                    <span>Email</span>
+                                    <Input 
+                                      placeholder="Filter..." 
+                                      className="h-6 text-[10px] px-2 bg-background border-border w-32"
+                                      value={filters.email || ""}
+                                      onChange={(e) => setFilters({...filters, email: e.target.value})}
+                                    />
+                                  </div>
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3">Status</th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">Duration</th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell whitespace-nowrap">Date</th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden xl:table-cell">Notes</th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3">Recording</th>
+                                <th className="p-3 w-10 text-right"></th>
                               </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </TabsContent>
-                  ))}
+                            </thead>
+                            <tbody>
+                              {filteredRecords.map((record) => {
+                                  const statusConf = callStatusIcons[record.status] || callStatusIcons["pending"];
+                                  const StatusIcon = statusConf.icon;
+                                  return (
+                                    <tr key={record.id} className={`border-b border-border last:border-0 hover:bg-secondary/30 transition-colors ${selectedLeadIds.has(record.id) ? 'bg-primary/5' : ''}`}>
+                                      <td className="p-3 pl-4 text-left">
+                                        <Checkbox 
+                                          checked={selectedLeadIds.has(record.id)} 
+                                          onCheckedChange={() => toggleSelectLead(record.id)}
+                                        />
+                                      </td>
+                                      <td className="p-3"><p className="text-sm text-foreground font-medium">{record.name}</p></td>
+                                      <td className="p-3 text-sm text-muted-foreground">{record.phone}</td>
+                                      <td className="p-3 text-sm text-muted-foreground hidden md:table-cell">{record.email}</td>
+                                      <td className="p-3">
+                                        <div className="flex items-center gap-1.5">
+                                          <StatusIcon className={`h-3.5 w-3.5 ${statusConf.color}`} />
+                                          <span className={`text-xs ${statusConf.color}`}>{statusConf.label}</span>
+                                        </div>
+                                      </td>
+                                      <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell">{record.duration}</td>
+                                      <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell whitespace-nowrap">{record.callDate}</td>
+                                      <td className="p-3 text-xs text-muted-foreground hidden xl:table-cell max-w-[200px] truncate">{record.notes || "—"}</td>
+                                      <td className="p-3">
+                                        {record.hasRecording ? (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); toggleRecording(record.id); }}>
+                                            {playingRecording === record.id ? <Pause className="h-3.5 w-3.5 text-primary" /> : <Play className="h-3.5 w-3.5 text-primary" />}
+                                          </Button>
+                                        ) : (
+                                          <span className="text-xs text-muted-foreground">—</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-right">
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                          onClick={(e) => { e.stopPropagation(); handleDeleteLead(record.id); }}
+                                          title="Delete lead"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              {filteredRecords.length === 0 && (
+                                <tr>
+                                  <td colSpan={10} className="p-8 text-center text-sm text-muted-foreground">
+                                    {campaign.records.length > 0 ? "No records match your filters." : "No records found. Upload data to get started."}
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </TabsContent>
+                    );
+                  })}
                 </Tabs>
               </div>
             )}
