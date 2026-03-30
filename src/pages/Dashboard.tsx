@@ -21,6 +21,7 @@ import {
   Plus,
   Trash2,
   Layout,
+  Info,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -149,44 +150,47 @@ const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, 
   const ChangeIcon = changeType === "up" ? ArrowUpRight : changeType === "down" ? ArrowDownRight : Activity;
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="group relative bg-card rounded-xl border border-border p-5 transition-all duration-300 hover:border-primary/30 overflow-hidden h-full cursor-help">
-            <div className="absolute inset-0 neural-grid opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            <div className="relative z-10">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
-                    <Trash2 className="h-3 w-3" />
+    <div className="group relative bg-card rounded-xl border border-border p-5 transition-all duration-300 hover:border-primary/30 overflow-hidden h-full">
+      <div className="absolute inset-0 neural-grid opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors">
+                    <Info className="h-3 w-3" />
                   </Button>
-                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                    <Icon className="h-4 w-4 text-primary" />
-                  </div>
-                </div>
-              </div>
-              <div className="text-3xl font-bold text-foreground font-body tracking-tight">
-                {prefix}{animatedValue.toLocaleString()}{suffix}
-              </div>
-              <div className={`flex items-center gap-1 mt-2 text-xs ${changeColor}`}>
-                <ChangeIcon className="h-3 w-3" />
-                <span>{change}</span>
-              </div>
+                </TooltipTrigger>
+                {description && (
+                  <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[200px]">
+                    <p className="font-semibold mb-1">{title}</p>
+                    <p className="text-muted-foreground leading-relaxed">{description}</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+            <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+              <Trash2 className="h-3 w-3" />
+            </Button>
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+              <Icon className="h-4 w-4 text-primary" />
             </div>
           </div>
-        </TooltipTrigger>
-        {description && (
-          <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[200px]">
-            <p className="font-semibold mb-1">{title}</p>
-            <p className="text-muted-foreground leading-relaxed">{description}</p>
-          </TooltipContent>
-        )}
-      </Tooltip>
-    </TooltipProvider>
+        </div>
+        <div className="text-3xl font-bold text-foreground font-body tracking-tight">
+          {prefix}{animatedValue.toLocaleString()}{suffix}
+        </div>
+        <div className={`flex items-center gap-1 mt-2 text-xs ${changeColor}`}>
+          <ChangeIcon className="h-3 w-3" />
+          <span>{change}</span>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -200,38 +204,41 @@ interface ChartWidgetProps {
 }
 
 const ChartWidget = ({ title, subtitle, children, onRemove, widthClass, description }: ChartWidgetProps) => (
-  <TooltipProvider>
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
-          <div className="flex items-center justify-between mb-4 shrink-0">
-            <div className="flex items-center gap-2">
-              <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-                {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
-                <Trash2 className="h-3.5 w-3.5" />
+  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
+    <div className="flex items-center justify-between mb-4 shrink-0">
+      <div className="flex items-center gap-2">
+        <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors">
+                <Info className="h-3.5 w-3.5" />
               </Button>
-              <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 relative z-10">
-            {children}
-          </div>
-        </Card>
-      </TooltipTrigger>
-      {description && (
-        <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[250px]">
-          <p className="font-semibold mb-1">{title}</p>
-          <p className="text-muted-foreground leading-relaxed">{description}</p>
-        </TooltipContent>
-      )}
-    </Tooltip>
-  </TooltipProvider>
+            </TooltipTrigger>
+            {description && (
+              <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[250px]">
+                <p className="font-semibold mb-1">{title}</p>
+                <p className="text-muted-foreground leading-relaxed">{description}</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
+        <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
+      </div>
+    </div>
+    <div className="flex-1 min-h-0 relative z-10">
+      {children}
+    </div>
+  </Card>
 );
 
 // ── main component ─────────────────────────────────────
