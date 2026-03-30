@@ -208,14 +208,15 @@ const Dashboard = () => {
   const [timeframe, setTimeframe] = useState<TimeframePreset>("7d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
   const [gmtTime, setGmtTime] = useState("");
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   
-  // Widget management
+  // Widget management - Default to empty list for a clean start
   const [activeWidgets, setActiveWidgets] = useState<string[]>(() => {
     try {
       const saved = typeof window !== 'undefined' ? localStorage.getItem('dashboard-widgets') : null;
-      return saved ? JSON.parse(saved) : AVAILABLE_WIDGETS.map(w => w.id);
+      return saved ? JSON.parse(saved) : [];
     } catch (e) {
-      return AVAILABLE_WIDGETS.map(w => w.id);
+      return [];
     }
   });
 
@@ -420,7 +421,7 @@ const Dashboard = () => {
           
           <div className="flex items-center gap-3">
             <TimeframeFilter value={timeframe} onChange={setTimeframe} customRange={customRange} onCustomRangeChange={setCustomRange} />
-            <Dialog>
+            <Dialog open={isLibraryOpen} onOpenChange={setIsLibraryOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
                   <Plus className="h-4 w-4" /> Add Widget
@@ -453,41 +454,41 @@ const Dashboard = () => {
       </div>
 
       {/* ── Grid with Drag & Drop ───────────────────── */}
-      <DragDropContext onDragEnd={onDragEnd}>
-        <Droppable droppableId="dashboard-widgets" direction="vertical">
-          {(provided) => (
-            <div 
-              {...provided.droppableProps} 
-              ref={provided.innerRef}
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6"
-            >
-              {activeWidgets.map((widgetId, index) => (
-                <Draggable key={widgetId} draggableId={widgetId} index={index}>
-                  {(provided, snapshot) => (
-                    <div
-                      ref={provided.innerRef}
-                      {...provided.draggableProps}
-                      className={`${getWidthClass(widgetId)} ${snapshot.isDragging ? 'z-50' : ''}`}
-                    >
-                      <div {...provided.dragHandleProps} className="h-full">
-                        {renderWidget(widgetId)}
+      {activeWidgets.length > 0 ? (
+        <DragDropContext onDragEnd={onDragEnd}>
+          <Droppable droppableId="dashboard-widgets" direction="vertical">
+            {(provided) => (
+              <div 
+                {...provided.droppableProps} 
+                ref={provided.innerRef}
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6"
+              >
+                {activeWidgets.map((widgetId, index) => (
+                  <Draggable key={widgetId} draggableId={widgetId} index={index}>
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        className={`${getWidthClass(widgetId)} ${snapshot.isDragging ? 'z-50' : ''}`}
+                      >
+                        <div {...provided.dragHandleProps} className="h-full">
+                          {renderWidget(widgetId)}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </Draggable>
-              ))}
-              {provided.placeholder}
-            </div>
-          )}
-        </Droppable>
-      </DragDropContext>
-      
-      {activeWidgets.length === 0 && (
-        <div className="text-center py-20 bg-card/50 rounded-2xl border border-dashed border-border">
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
+      ) : (
+        <div className="text-center py-20 bg-card/50 rounded-2xl border border-dashed border-border opacity-0 animate-fade-in" style={{ animationFillMode: "forwards" }}>
           <Sparkles className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
           <h3 className="text-lg font-medium text-foreground">Your dashboard is empty</h3>
           <p className="text-sm text-muted-foreground mb-6">Start by adding widgets from the library</p>
-          <Button variant="outline" className="border-border">Open Library</Button>
+          <Button variant="outline" className="border-border hover:bg-secondary/50" onClick={() => setIsLibraryOpen(true)}>Open Library</Button>
         </div>
       )}
     </div>
