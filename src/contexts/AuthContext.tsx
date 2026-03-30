@@ -9,8 +9,10 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   role: UserRole | null;
+  permissions: string[];
   profile: { full_name: string; company_name: string; avatar_url: string } | null;
   signOut: () => Promise<void>;
+  hasPermission: (permission: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -18,8 +20,10 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   role: null,
+  permissions: [],
   profile: null,
   signOut: async () => {},
+  hasPermission: () => false,
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -29,15 +33,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [profile, setProfile] = useState<AuthContextType["profile"]>(null);
 
   const fetchUserData = async (userId: string) => {
-    const [{ data: roles }, { data: prof }] = await Promise.all([
+    const [{ data: roles }, { data: prof }, { data: perms }] = await Promise.all([
       supabase.from("user_roles").select("role").eq("user_id", userId).single(),
       supabase.from("profiles").select("full_name, company_name, avatar_url").eq("id", userId).single(),
+      supabase.from("user_permissions").select("permission_key").eq("user_id", userId),
     ]);
+    
     if (roles) setRole(roles.role as UserRole);
     if (prof) setProfile(prof);
+    if (perms) setPermissions(perms.map(p => p.permission_key));
+  };
+
+  const hasPermission = (permission: string) => {
+    // Admins always have all permissions
+    if (role === 'admin') return true;
+    return permissions.includes(permission);
   };
 
   useEffect(() => {
@@ -72,7 +86,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, role, profile, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, role, permissions, profile, signOut, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

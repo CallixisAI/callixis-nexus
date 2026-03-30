@@ -35,25 +35,31 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { signOut, profile, role } = useAuth();
+  const { signOut, profile, role, hasPermission } = useAuth();
 
   const [gmtTime, setGmtTime] = useState("");
 
   const isAdmin = role === "admin";
 
-  const navItems = [
-    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-    ...(isAdmin ? [{ title: "Admin", url: "/admin", icon: ShieldAlert }] : []),
-    { title: "Campaigns", url: "/campaigns", icon: Megaphone },
-    { title: "AI Agents", url: "/ai-agents", icon: Bot },
-    { title: "Plugins", url: "/plugins", icon: Puzzle },
-    { title: "Call Center", url: "/call-center", icon: Headphones },
-    { title: "Reports", url: "/reports", icon: BarChart3 },
-    { title: "Finance", url: "/finance", icon: DollarSign },
-    { title: "Marketplace", url: "/marketplace", icon: Store },
-    { title: "Calendar", url: "/calendar", icon: CalendarCheck },
-    { title: "Settings", url: "/settings", icon: Settings },
+  const allNavItems = [
+    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, permission: "dashboard" },
+    { title: "Admin", url: "/admin", icon: ShieldAlert, isAdminOnly: true },
+    { title: "Campaigns", url: "/campaigns", icon: Megaphone, permission: "campaigns" },
+    { title: "AI Agents", url: "/ai-agents", icon: Bot, permission: "ai-agents" },
+    { title: "Plugins", url: "/plugins", icon: Puzzle, permission: "plugins" },
+    { title: "Call Center", url: "/call-center", icon: Headphones, permission: "call-center" },
+    { title: "Reports", url: "/reports", icon: BarChart3, permission: "reports" },
+    { title: "Finance", url: "/finance", icon: DollarSign, permission: "finance" },
+    { title: "Marketplace", url: "/marketplace", icon: Store, permission: "marketplace" },
+    { title: "Calendar", url: "/calendar", icon: CalendarCheck, permission: "calendar" },
+    { title: "Settings", url: "/settings", icon: Settings, permission: "settings" },
   ];
+
+  const navItems = allNavItems.filter(item => {
+    if (item.isAdminOnly) return isAdmin;
+    if (item.permission) return hasPermission(item.permission);
+    return true;
+  });
 
   useEffect(() => {
     const tick = () => {
