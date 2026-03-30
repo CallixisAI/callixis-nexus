@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { 
   Users, 
   Shield, 
@@ -6,7 +6,7 @@ import {
   UserPlus, 
   Phone, 
   CheckCircle2, 
-  XCircle,
+  Clock,
   LayoutDashboard,
   Megaphone,
   Bot,
@@ -20,8 +20,10 @@ import {
   Lock,
   Loader2,
   Copy,
-  ExternalLink,
-  Trash2
+  Search,
+  Trash2,
+  MoreVertical,
+  Plus
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,9 +37,18 @@ import {
   SelectTrigger, 
   SelectValue 
 } from "@/components/ui/select";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogHeader, 
+  DialogTitle, 
+  DialogTrigger,
+  DialogFooter
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Define all possible app features for the permission checklist
 const APP_FEATURES = [
@@ -53,336 +64,332 @@ const APP_FEATURES = [
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-interface UserSlot {
+interface UserDisplay {
   id: string;
-  auth_id?: string;
   name: string;
   email: string;
-  phone: string;
   role: string;
+  status: 'active' | 'pending';
   permissions: string[];
-  isCreated: boolean;
 }
 
 const Admin = () => {
   const [loading, setLoading] = useState(false);
-  const [selectedSlotId, setSelectedSlotId] = useState("user1");
-  const [slots, setSlots] = useState<Record<string, UserSlot>>({
-    user1: { id: "user1", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
-    user2: { id: "user2", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
-    user3: { id: "user3", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
-    user4: { id: "user4", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
-    user5: { id: "user5", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
+  const [users, setUsers] = useState<UserDisplay[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  
+  // Form State for new invite
+  const [newInvite, setNewInvite] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    role: "brand",
+    permissions: ["dashboard"] as string[]
   });
 
-  // Load existing users from profiles & user_roles on mount
-  useEffect(() => {
-    const fetchUsers = async () => {
-      setLoading(true);
-      try {
-        // Try fetching, but wrap in safe check to avoid crash if tables don't exist yet
-        const { data: profiles } = await supabase.from('profiles').select('*');
-        const { data: roles } = await supabase.from('user_roles').select('*');
-        const { data: perms } = await supabase.from('user_permissions').select('*');
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Fetch active users from profiles
+      const { data: profiles } = await supabase.from('profiles').select('*');
+      const { data: roles } = await supabase.from('user_roles').select('*');
+      const { data: perms } = await supabase.from('user_permissions').select('*');
+      
+      // Fetch pending invites
+      const { data: invites } = await supabase.from('user_invites').select('*').eq('status', 'pending');
 
-        if (profiles && roles) {
-          const newSlots = { ...slots };
-          profiles.forEach((profile, index) => {
-            if (index < 5) {
-              const slotId = `user${index + 1}`;
-              const userRole = roles?.find(r => r.user_id === profile.id)?.role || 'brand';
-              const userPerms = perms?.filter(p => p.user_id === profile.id).map(p => p.permission_key) || ["dashboard"];
-              
-              newSlots[slotId] = {
-                id: slotId,
-                auth_id: profile.id,
-                name: profile.full_name || "",
-                email: "", 
-                phone: (profile as any).phone || "",
-                role: userRole,
-                permissions: userPerms,
-                isCreated: true
-              };
-            }
-          });
-          setSlots(newSlots);
-        }
-      } catch (err) {
-        console.error("Suppressed load error:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchUsers();
+      const combinedUsers: UserDisplay[] = [];
+
+      // Process Active Users
+      profiles?.forEach(profile => {
+        const userRole = roles?.find(r => r.user_id === profile.id)?.role || 'brand';
+        const userPerms = perms?.filter(p => p.user_id === profile.id).map(p => p.permission_key) || [];
+        
+        combinedUsers.push({
+          id: profile.id,
+          name: profile.full_name || "Unknown",
+          email: "Active Account", // We don't show emails for security unless needed
+          role: userRole,
+          status: 'active',
+          permissions: userPerms
+        });
+      });
+
+      // Process Pending Invites
+      invites?.forEach(invite => {
+        combinedUsers.push({
+          id: invite.id,
+          name: invite.full_name,
+          email: invite.email,
+          role: invite.role,
+          status: 'pending',
+          permissions: invite.permissions
+        });
+      });
+
+      setUsers(combinedUsers);
+    } catch (err) {
+      console.error("Error loading users:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const currentSlot = slots[selectedSlotId];
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
-  const handleUpdateSlot = (field: keyof UserSlot, value: any) => {
-    setSlots(prev => ({
+  const handleTogglePermission = (id: string) => {
+    setNewInvite(prev => ({
       ...prev,
-      [selectedSlotId]: { ...prev[selectedSlotId], [field]: value }
+      permissions: prev.permissions.includes(id) 
+        ? prev.permissions.filter(p => p !== id)
+        : [...prev.permissions, id]
     }));
   };
 
-  const togglePermission = (featureId: string) => {
-    const currentPerms = [...currentSlot.permissions];
-    if (currentPerms.includes(featureId)) {
-      handleUpdateSlot("permissions", currentPerms.filter(p => p !== featureId));
-    } else {
-      handleUpdateSlot("permissions", [...currentPerms, featureId]);
-    }
-  };
-
-  const handleCreateUser = async () => {
-    if (!currentSlot.email || !currentSlot.name) {
-      toast.error("Please fill in Name and Email!");
+  const handleSendInvite = async () => {
+    if (!newInvite.email || !newInvite.name) {
+      toast.error("Name and Email are required!");
       return;
     }
 
     setLoading(true);
     try {
-      // 1. Create a "Pre-Provisioned" entry in user_invites
       const { error } = await supabase.from('user_invites').upsert({
-        email: currentSlot.email.toLowerCase(),
-        full_name: currentSlot.name,
-        phone: currentSlot.phone,
-        role: currentSlot.role,
-        permissions: currentSlot.permissions
+        email: newInvite.email.toLowerCase(),
+        full_name: newInvite.name,
+        role: newInvite.role,
+        permissions: newInvite.permissions,
+        status: 'pending'
       });
 
       if (error) throw error;
 
-      handleUpdateSlot("isCreated", true);
-      toast.success(`Invitation ready for ${currentSlot.email}!`);
+      toast.success(`Invitation ready for ${newInvite.email}`);
+      setIsInviteModalOpen(false);
+      setNewInvite({ name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"] });
+      fetchUsers();
     } catch (err: any) {
-      toast.error(`Error: ${err.message}`);
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const copyInviteLink = () => {
-    const link = `${window.location.origin}/signup?email=${encodeURIComponent(currentSlot.email)}`;
+  const copyInviteLink = (email: string) => {
+    const link = `${window.location.origin}/signup?email=${encodeURIComponent(email)}`;
     navigator.clipboard.writeText(link);
-    toast.success("Invite link copied to clipboard!");
+    toast.success("Magic Link copied!");
   };
 
-  const handleImpersonate = () => {
-    toast.info(`Entering 'View Only' mode as ${currentSlot.name}. (Admin Observation Mode)`);
-    // Logic: Redirect to dashboard with impersonation flag
-    // window.location.href = `/dashboard?impersonate=${currentSlot.auth_id}`;
-  };
-
-  if (loading && !Object.values(slots).some(s => s.isCreated)) {
-    return (
-      <div className="h-[60vh] flex flex-col items-center justify-center gap-4">
-        <Loader2 className="h-8 w-8 text-primary animate-spin" />
-        <p className="text-muted-foreground animate-pulse">Syncing with CalliXis AI Database...</p>
-      </div>
-    );
-  }
+  const filteredUsers = users.filter(u => 
+    u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    u.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 animate-fade-in pb-10">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground font-display">Admin Command Center</h1>
-          <p className="text-muted-foreground text-sm mt-1">Manage user seats, roles, and granular permissions.</p>
+          <h1 className="text-3xl font-bold text-foreground font-display tracking-tight">User Management</h1>
+          <p className="text-muted-foreground text-sm mt-1">Scale your environment with unlimited seats and granular control.</p>
         </div>
-        <Badge variant="outline" className="px-3 py-1 border-primary/30 bg-primary/5 text-primary gap-1.5">
-          <Shield className="h-3.5 w-3.5" />
-          Administrator Access
-        </Badge>
+        
+        <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
+          <DialogTrigger asChild>
+            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-11 px-6 shadow-lg shadow-primary/20 transition-all active:scale-95">
+              <UserPlus className="h-4 w-4" /> Invite New User
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="bg-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-display">New User Invitation</DialogTitle>
+              <p className="text-sm text-muted-foreground">The user will receive a magic link to set their own password.</p>
+            </DialogHeader>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Full Name</Label>
+                  <Input 
+                    placeholder="Enter full name" 
+                    value={newInvite.name} 
+                    onChange={e => setNewInvite({...newInvite, name: e.target.value})}
+                    className="bg-secondary/30 border-border"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Email Address</Label>
+                  <Input 
+                    type="email" 
+                    placeholder="user@company.com" 
+                    value={newInvite.email} 
+                    onChange={e => setNewInvite({...newInvite, email: e.target.value})}
+                    className="bg-secondary/30 border-border"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Phone Number (Optional)</Label>
+                  <Input 
+                    placeholder="+1..." 
+                    value={newInvite.phone} 
+                    onChange={e => setNewInvite({...newInvite, phone: e.target.value})}
+                    className="bg-secondary/30 border-border"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>System Role</Label>
+                  <Select value={newInvite.role} onValueChange={v => setNewInvite({...newInvite, role: v})}>
+                    <SelectTrigger className="bg-secondary/30 border-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="brand">Brand Partner</SelectItem>
+                      <SelectItem value="affiliate">Affiliate Executive</SelectItem>
+                      <SelectItem value="admin">Administrator</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Label className="flex items-center gap-2">
+                  <Lock className="h-3 w-3 text-primary" /> Feature Permissions
+                </Label>
+                <div className="grid grid-cols-1 gap-2 p-3 bg-secondary/20 rounded-lg border border-border">
+                  {APP_FEATURES.map(f => (
+                    <div key={f.id} className="flex items-center space-x-2">
+                      <Checkbox 
+                        id={`modal-${f.id}`} 
+                        checked={newInvite.permissions.includes(f.id)}
+                        onCheckedChange={() => handleTogglePermission(f.id)}
+                      />
+                      <Label htmlFor={`modal-${f.id}`} className="text-xs flex items-center gap-2 cursor-pointer">
+                        <f.icon className="h-3 w-3 text-muted-foreground" /> {f.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="gap-3">
+              <Button variant="outline" onClick={() => setIsInviteModalOpen(false)}>Cancel</Button>
+              <Button onClick={handleSendInvite} disabled={loading} className="px-8">
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create & Get Link"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Left: User Slot Selection */}
-        <Card className="lg:col-span-1 p-4 border-border bg-card/50">
-          <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-            <Users className="h-4 w-4 text-primary" /> User Slots
-          </h3>
-          <div className="space-y-2">
-            {Object.values(slots).map((slot) => (
-              <button
-                key={slot.id}
-                onClick={() => setSelectedSlotId(slot.id)}
-                className={`w-full text-left p-3 rounded-lg border transition-all flex items-center justify-between group ${
-                  selectedSlotId === slot.id 
-                    ? "border-primary bg-primary/10 text-foreground" 
-                    : "border-border hover:border-primary/50 text-muted-foreground"
-                }`}
-              >
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold uppercase tracking-wider">{slot.id}</span>
-                  <span className="text-sm truncate">{slot.isCreated ? slot.name : "Available Slot"}</span>
-                </div>
-                {slot.isCreated ? (
-                  <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
-                ) : (
-                  <UserPlus className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                )}
-              </button>
-            ))}
-          </div>
-        </Card>
+      {/* Directory Controls */}
+      <div className="flex items-center gap-4 bg-card/50 p-4 rounded-xl border border-border">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input 
+            placeholder="Search by name or email..." 
+            className="pl-10 bg-background border-border h-10"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <Button variant="outline" className="h-10 border-border" onClick={fetchUsers}>
+          <Clock className="h-4 w-4 mr-2" /> Refresh List
+        </Button>
+      </div>
 
-        {/* Right: User Details & Permissions */}
-        <Card className="lg:col-span-3 p-6 border-border bg-card">
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-border">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
-                {selectedSlotId.slice(-1)}
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">Configure {selectedSlotId.toUpperCase()}</h2>
-                <p className="text-xs text-muted-foreground">Setup identity and access rights</p>
-              </div>
-            </div>
-            {currentSlot.isCreated && (
-              <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-                Account Active
-              </Badge>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Column 1: Identity */}
-            <div className="space-y-5">
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-                <Shield className="h-4 w-4 text-primary" /> Identity Details
-              </h3>
-              
-              <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
-                <Input 
-                  id="name" 
-                  placeholder="John Doe" 
-                  value={currentSlot.name} 
-                  onChange={(e) => handleUpdateSlot("name", e.target.value)}
-                  className="bg-secondary/30 border-border"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input 
-                    id="email" 
-                    type="email" 
-                    placeholder="john@example.com" 
-                    value={currentSlot.email} 
-                    onChange={(e) => handleUpdateSlot("email", e.target.value)}
-                    className="pl-10 bg-secondary/30 border-border"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="phone">Phone Number</Label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input 
-                    id="phone" 
-                    placeholder="+1 (555) 000-0000" 
-                    value={currentSlot.phone} 
-                    onChange={(e) => handleUpdateSlot("phone", e.target.value)}
-                    className="pl-10 bg-secondary/30 border-border"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="role">System Role</Label>
-                <Select value={currentSlot.role} onValueChange={(val) => handleUpdateSlot("role", val)}>
-                  <SelectTrigger className="bg-secondary/30 border-border">
-                    <SelectValue placeholder="Select Role" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-card border-border">
-                    <SelectItem value="admin">Administrator</SelectItem>
-                    <SelectItem value="brand">Brand Partner</SelectItem>
-                    <SelectItem value="affiliate">Affiliate Executive</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* Column 2: Permissions */}
-            <div className="space-y-5">
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-                <Lock className="h-4 w-4 text-primary" /> Feature Permissions
-              </h3>
-              
-              <div className="bg-secondary/20 rounded-xl border border-border p-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {APP_FEATURES.map((feature) => {
-                    const Icon = feature.icon;
-                    const isChecked = currentSlot.permissions.includes(feature.id);
-                    return (
-                      <div 
-                        key={feature.id} 
-                        className={`flex items-center space-x-3 p-2 rounded-lg transition-colors hover:bg-secondary/40 cursor-pointer ${isChecked ? 'bg-secondary/30' : ''}`}
-                        onClick={() => togglePermission(feature.id)}
-                      >
-                        <Checkbox 
-                          id={feature.id} 
-                          checked={isChecked}
-                          onCheckedChange={() => togglePermission(feature.id)}
-                        />
-                        <div className="flex items-center gap-2">
-                          <Icon className={`h-3.5 w-3.5 ${isChecked ? 'text-primary' : 'text-muted-foreground'}`} />
-                          <Label 
-                            htmlFor={feature.id} 
-                            className={`text-xs cursor-pointer ${isChecked ? 'text-foreground font-medium' : 'text-muted-foreground'}`}
-                          >
-                            {feature.label}
-                          </Label>
+      {/* User Table */}
+      <Card className="border-border bg-card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">User / Member</th>
+                <th className="p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Role</th>
+                <th className="p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Permissions</th>
+                <th className="p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="p-10 text-center text-muted-foreground">
+                    {loading ? "Searching the Nexus..." : "No users found in this environment."}
+                  </td>
+                </tr>
+              ) : (
+                filteredUsers.map((user) => (
+                  <tr key={user.id} className="hover:bg-secondary/20 transition-colors group">
+                    <td className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold text-sm ${user.status === 'active' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                          {user.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-foreground">{user.name}</span>
+                          <span className="text-[11px] text-muted-foreground">{user.email}</span>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="pt-4 flex flex-col gap-3">
-                <Button 
-                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-                  onClick={handleCreateUser}
-                  disabled={loading}
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (currentSlot.isCreated ? "Update Invitation" : "Create Invitation Link")}
-                </Button>
-                
-                {currentSlot.isCreated && (
-                  <div className="space-y-2">
-                    <div className="p-3 bg-secondary/50 rounded-lg border border-dashed border-primary/30 flex items-center justify-between">
-                      <span className="text-[10px] font-mono truncate text-muted-foreground">
-                        {window.location.origin}/signup?email={currentSlot.email}
-                      </span>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-primary" onClick={copyInviteLink}>
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button 
-                        variant="outline" 
-                        className="flex-1 border-primary/30 text-primary hover:bg-primary/10 gap-2"
-                        onClick={handleImpersonate}
-                      >
-                        <Users className="h-4 w-4" /> Login as {currentSlot.name.split(' ')[0]}
-                      </Button>
-                      <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => handleUpdateSlot("isCreated", false)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </Card>
-      </div>
+                    </td>
+                    <td className="p-4">
+                      <Badge variant="outline" className="text-[10px] font-medium capitalize border-primary/20">
+                        {user.role}
+                      </Badge>
+                    </td>
+                    <td className="p-4">
+                      {user.status === 'active' ? (
+                        <div className="flex items-center gap-1.5 text-emerald-500 text-xs font-medium">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-amber-500 text-xs font-medium">
+                          <Clock className="h-3.5 w-3.5 animate-pulse" /> Pending
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <div className="flex gap-1 flex-wrap max-w-[200px]">
+                        {user.permissions.slice(0, 3).map(p => (
+                          <Badge key={p} variant="secondary" className="text-[9px] h-4 px-1.5">
+                            {p}
+                          </Badge>
+                        ))}
+                        {user.permissions.length > 3 && (
+                          <span className="text-[9px] text-muted-foreground">+{user.permissions.length - 3}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-4 text-right">
+                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {user.status === 'pending' && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => copyInviteLink(user.email)}>
+                                  <Copy className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Copy Magic Link</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 };
