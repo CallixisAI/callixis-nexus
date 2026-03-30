@@ -11,6 +11,7 @@ import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import AppLayout from "./components/AppLayout";
 import Dashboard from "./pages/Dashboard";
+import Admin from "./pages/Admin";
 import Campaigns from "./pages/Campaigns";
 import AIAgents from "./pages/AIAgents";
 import Plugins from "./pages/Plugins";
@@ -39,6 +40,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
                 <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/admin" element={<Admin />} />
                 <Route path="/campaigns" element={<Campaigns />} />
                 <Route path="/ai-agents" element={<AIAgents />} />
                 <Route path="/plugins" element={<Plugins />} />

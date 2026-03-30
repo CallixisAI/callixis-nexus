@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   LayoutDashboard,
+  ShieldAlert,
   Megaphone,
   Bot,
   Puzzle,
@@ -29,19 +30,6 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 
-const navItems = [
-  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Campaigns", url: "/campaigns", icon: Megaphone },
-  { title: "AI Agents", url: "/ai-agents", icon: Bot },
-  { title: "Plugins", url: "/plugins", icon: Puzzle },
-  { title: "Call Center", url: "/call-center", icon: Headphones },
-  { title: "Reports", url: "/reports", icon: BarChart3 },
-  { title: "Finance", url: "/finance", icon: DollarSign },
-  { title: "Marketplace", url: "/marketplace", icon: Store },
-  { title: "Calendar", url: "/calendar", icon: CalendarCheck },
-  { title: "Settings", url: "/settings", icon: Settings },
-];
-
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
@@ -50,6 +38,22 @@ export function AppSidebar() {
   const { signOut, profile, role } = useAuth();
 
   const [gmtTime, setGmtTime] = useState("");
+
+  const isAdmin = role === "admin";
+
+  const navItems = [
+    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+    ...(isAdmin ? [{ title: "Admin", url: "/admin", icon: ShieldAlert }] : []),
+    { title: "Campaigns", url: "/campaigns", icon: Megaphone },
+    { title: "AI Agents", url: "/ai-agents", icon: Bot },
+    { title: "Plugins", url: "/plugins", icon: Puzzle },
+    { title: "Call Center", url: "/call-center", icon: Headphones },
+    { title: "Reports", url: "/reports", icon: BarChart3 },
+    { title: "Finance", url: "/finance", icon: DollarSign },
+    { title: "Marketplace", url: "/marketplace", icon: Store },
+    { title: "Calendar", url: "/calendar", icon: CalendarCheck },
+    { title: "Settings", url: "/settings", icon: Settings },
+  ];
 
   useEffect(() => {
     const tick = () => {
