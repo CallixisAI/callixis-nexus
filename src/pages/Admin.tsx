@@ -20,7 +20,8 @@ import {
   Lock,
   Loader2,
   Copy,
-  ExternalLink
+  ExternalLink,
+  Trash2
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
