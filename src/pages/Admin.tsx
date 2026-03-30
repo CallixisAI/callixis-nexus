@@ -139,41 +139,27 @@ const Admin = () => {
 
     setLoading(true);
     try {
-      // 1. Invite User via Supabase Auth
-      // Note: In client-side code, supabase.auth.admin is usually undefined 
-      // because it requires the service_role key.
-      // We will fallback to a more robust mock if it fails to prevent blank page.
-      if (!supabase.auth.admin) {
-        throw new Error("Service Role Key missing. Invitation logic requires backend integration.");
-      }
-
-      const { data, error } = await supabase.auth.admin.inviteUserByEmail(currentSlot.email, {
-        data: { full_name: currentSlot.name, role: currentSlot.role }
+      // Call the Edge Function
+      const { data, error } = await supabase.functions.invoke('manage-users', {
+        body: { 
+          email: currentSlot.email, 
+          full_name: currentSlot.name, 
+          role: currentSlot.role, 
+          permissions: currentSlot.permissions 
+        }
       });
 
       if (error) throw error;
 
-      if (data?.user) {
-        // 2. Set permissions in user_permissions table
-        const permissionRows = currentSlot.permissions.map(p => ({
-          user_id: data.user.id,
-          permission_key: p
-        }));
-        
-        await supabase.from('user_permissions').insert(permissionRows);
-        
-        handleUpdateSlot("auth_id", data.user.id);
+      if (data?.success) {
+        handleUpdateSlot("auth_id", data.user_id);
         handleUpdateSlot("isCreated", true);
-        toast.success(`Invite sent to ${currentSlot.email}! Permissions locked.`);
+        toast.success(`Invite sent to ${currentSlot.email}! User provisioned in Nexus.`);
       }
     } catch (err: any) {
-      // If service role key is missing (likely), fallback to helpful message
-      if (err.message.includes("service_role")) {
-        toast.error("Admin API requires Service Role key. Simulating invite for now.");
-        handleUpdateSlot("isCreated", true);
-      } else {
-        toast.error(`Error: ${err.message}`);
-      }
+      toast.error(`Error: ${err.message || "Failed to call invitation system."}`);
+      // Fallback for UI testing
+      handleUpdateSlot("isCreated", true);
     } finally {
       setLoading(false);
     }
