@@ -127,7 +127,18 @@ const AVAILABLE_WIDGETS: DashboardWidget[] = [
 ];
 
 // ── widget components ──────────────────────────────────
-const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove }: any) => {
+interface StatCardProps {
+  title: string;
+  value: number;
+  prefix?: string;
+  suffix?: string;
+  change: string;
+  changeType: "up" | "down" | "neutral";
+  icon: React.ElementType;
+  onRemove: () => void;
+}
+
+const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove }: StatCardProps) => {
   const animatedValue = useAnimatedNumber(value);
   const changeColor = changeType === "up" ? "text-primary" : changeType === "down" ? "text-destructive" : "text-muted-foreground";
   const ChangeIcon = changeType === "up" ? ArrowUpRight : changeType === "down" ? ArrowDownRight : Activity;
@@ -162,9 +173,17 @@ const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, 
   );
 };
 
-const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: any) => (
-  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full`}>
-    <div className="flex items-center justify-between mb-4">
+interface ChartWidgetProps {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  onRemove: () => void;
+  widthClass: string;
+}
+
+const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: ChartWidgetProps) => (
+  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col`}>
+    <div className="flex items-center justify-between mb-4 shrink-0">
       <div className="flex items-center gap-2">
         <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
         <div>
@@ -179,7 +198,9 @@ const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: any) =
         <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
       </div>
     </div>
-    {children}
+    <div className="flex-1 min-h-0">
+      {children}
+    </div>
   </Card>
 );
 
