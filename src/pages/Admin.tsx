@@ -52,6 +52,7 @@ interface UserSlot {
   id: string;
   name: string;
   email: string;
+  password?: string;
   phone: string;
   role: string;
   permissions: string[];
@@ -87,12 +88,17 @@ const Admin = () => {
   };
 
   const handleCreateUser = () => {
-    if (!currentSlot.email || !currentSlot.name) {
-      toast.error("Please fill in Name and Email at least!");
+    if (!currentSlot.email || !currentSlot.name || (!currentSlot.isCreated && !currentSlot.password)) {
+      toast.error("Please fill in Name, Email, and Password!");
       return;
     }
     handleUpdateSlot("isCreated", true);
-    toast.success(`User ${currentSlot.name} created successfully with ${currentSlot.permissions.length} permissions!`);
+    toast.success(`User ${currentSlot.name} created successfully! Invite email sent (simulated).`);
+  };
+
+  const handleImpersonate = () => {
+    toast.info(`Entering 'View Only' mode as ${currentSlot.name}. (Admin Observation Mode)`);
+    // Logic: In a real app, we would store an "impersonation_id" in session and lock all 'write' actions
   };
 
   return (
@@ -192,6 +198,22 @@ const Admin = () => {
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="password">Login Password</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input 
+                    id="password" 
+                    type="password" 
+                    placeholder="••••••••" 
+                    value={currentSlot.password || ""} 
+                    onChange={(e) => handleUpdateSlot("password", e.target.value)}
+                    className="pl-10 bg-secondary/30 border-border"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground">Used for user's initial login credentials.</p>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="phone">Phone Number</Label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -257,17 +279,27 @@ const Admin = () => {
                 </div>
               </div>
 
-              <div className="pt-4 flex gap-3">
+              <div className="pt-4 flex flex-col gap-3">
                 <Button 
-                  className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
                   onClick={handleCreateUser}
                 >
-                  {currentSlot.isCreated ? "Update User Access" : "Create User Profile"}
+                  {currentSlot.isCreated ? "Update User Profile" : "Create User & Set Credentials"}
                 </Button>
+                
                 {currentSlot.isCreated && (
-                  <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => handleUpdateSlot("isCreated", false)}>
-                    Deactivate
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="outline" 
+                      className="flex-1 border-primary/30 text-primary hover:bg-primary/10 gap-2"
+                      onClick={handleImpersonate}
+                    >
+                      <Users className="h-4 w-4" /> Login as {currentSlot.name.split(' ')[0]}
+                    </Button>
+                    <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => handleUpdateSlot("isCreated", false)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 )}
               </div>
             </div>
