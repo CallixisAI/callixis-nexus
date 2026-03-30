@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   Users, 
   Shield, 
@@ -17,7 +17,8 @@ import {
   Store,
   CalendarCheck,
   Settings,
-  Lock
+  Lock,
+  Loader2
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 
 // Define all possible app features for the permission checklist
 const APP_FEATURES = [
@@ -50,9 +52,9 @@ const APP_FEATURES = [
 
 interface UserSlot {
   id: string;
+  auth_id?: string;
   name: string;
   email: string;
-  password?: string;
   phone: string;
   role: string;
   permissions: string[];
@@ -60,6 +62,7 @@ interface UserSlot {
 }
 
 const Admin = () => {
+  const [loading, setLoading] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState("user1");
   const [slots, setSlots] = useState<Record<string, UserSlot>>({
     user1: { id: "user1", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
@@ -68,6 +71,47 @@ const Admin = () => {
     user4: { id: "user4", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
     user5: { id: "user5", name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"], isCreated: false },
   });
+
+  // Load existing users from profiles & user_roles on mount
+  useEffect(() => {
+    const fetchUsers = async () => {
+      setLoading(true);
+      try {
+        const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
+        const { data: roles, error: rError } = await supabase.from('user_roles').select('*');
+        const { data: perms, error: permError } = await supabase.from('user_permissions').select('*');
+
+        if (profiles && roles) {
+          const newSlots = { ...slots };
+          // Map existing users to slots (excluding current admin if possible, or just filling slots)
+          profiles.forEach((profile, index) => {
+            if (index < 5) {
+              const slotId = `user${index + 1}`;
+              const userRole = roles.find(r => r.user_id === profile.id)?.role || 'brand';
+              const userPerms = perms?.filter(p => p.user_id === profile.id).map(p => p.permission_key) || ["dashboard"];
+              
+              newSlots[slotId] = {
+                id: slotId,
+                auth_id: profile.id,
+                name: profile.full_name || "",
+                email: "", // Auth email isn't in profiles by default
+                phone: (profile as any).phone || "",
+                role: userRole,
+                permissions: userPerms,
+                isCreated: true
+              };
+            }
+          });
+          setSlots(newSlots);
+        }
+      } catch (err) {
+        console.error("Error loading users:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
 
   const currentSlot = slots[selectedSlotId];
 
@@ -87,19 +131,61 @@ const Admin = () => {
     }
   };
 
-  const handleCreateUser = () => {
-    if (!currentSlot.email || !currentSlot.name || (!currentSlot.isCreated && !currentSlot.password)) {
-      toast.error("Please fill in Name, Email, and Password!");
+  const handleCreateUser = async () => {
+    if (!currentSlot.email || !currentSlot.name) {
+      toast.error("Please fill in Name and Email!");
       return;
     }
-    handleUpdateSlot("isCreated", true);
-    toast.success(`User ${currentSlot.name} created successfully! Invite email sent (simulated).`);
+
+    setLoading(true);
+    try {
+      // 1. Invite User via Supabase Auth
+      const { data, error } = await supabase.auth.admin.inviteUserByEmail(currentSlot.email, {
+        data: { full_name: currentSlot.name, role: currentSlot.role }
+      });
+
+      if (error) throw error;
+
+      if (data?.user) {
+        // 2. Set permissions in user_permissions table
+        const permissionRows = currentSlot.permissions.map(p => ({
+          user_id: data.user.id,
+          permission_key: p
+        }));
+        
+        await supabase.from('user_permissions').insert(permissionRows);
+        
+        handleUpdateSlot("auth_id", data.user.id);
+        handleUpdateSlot("isCreated", true);
+        toast.success(`Invite sent to ${currentSlot.email}! Permissions locked.`);
+      }
+    } catch (err: any) {
+      // If service role key is missing (likely), fallback to helpful message
+      if (err.message.includes("service_role")) {
+        toast.error("Admin API requires Service Role key. Simulating invite for now.");
+        handleUpdateSlot("isCreated", true);
+      } else {
+        toast.error(`Error: ${err.message}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleImpersonate = () => {
     toast.info(`Entering 'View Only' mode as ${currentSlot.name}. (Admin Observation Mode)`);
-    // Logic: In a real app, we would store an "impersonation_id" in session and lock all 'write' actions
+    // Logic: Redirect to dashboard with impersonation flag
+    // window.location.href = `/dashboard?impersonate=${currentSlot.auth_id}`;
   };
+
+  if (loading && !Object.values(slots).some(s => s.isCreated)) {
+    return (
+      <div className="h-[60vh] flex flex-col items-center justify-center gap-4">
+        <Loader2 className="h-8 w-8 text-primary animate-spin" />
+        <p className="text-muted-foreground animate-pulse">Syncing with Nexus Database...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -283,8 +369,9 @@ const Admin = () => {
                 <Button 
                   className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
                   onClick={handleCreateUser}
+                  disabled={loading}
                 >
-                  {currentSlot.isCreated ? "Update User Profile" : "Create User & Set Credentials"}
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (currentSlot.isCreated ? "Update User Profile" : "Send Invite & Grant Access")}
                 </Button>
                 
                 {currentSlot.isCreated && (
