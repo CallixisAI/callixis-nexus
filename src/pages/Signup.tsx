@@ -13,6 +13,7 @@ const Signup = () => {
   const [email, setEmail] = useState(searchParams.get("email") || "");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
   const [role, setRole] = useState<"affiliate" | "brand">("affiliate");
   const [loading, setLoading] = useState(false);
   const [isInvited, setIsInvited] = useState(false);
@@ -29,6 +30,7 @@ const Signup = () => {
       
       if (data) {
         setFullName(data.full_name);
+        setPhone(data.phone || "");
         setRole(data.role);
         setIsInvited(true);
       }
@@ -44,7 +46,7 @@ const Signup = () => {
       email,
       password,
       options: {
-        data: { full_name: fullName, role },
+        data: { full_name: fullName, phone, role },
         emailRedirectTo: window.location.origin,
       },
     });
@@ -89,6 +91,17 @@ const Signup = () => {
               placeholder="John Doe"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
+              className="bg-secondary border-border focus:border-primary h-11"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="phone" className="text-sm text-muted-foreground">Phone Number</Label>
+            <Input
+              id="phone"
+              placeholder="+1 (555) 000-0000"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
               className="bg-secondary border-border focus:border-primary h-11"
               required
             />

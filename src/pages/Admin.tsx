@@ -143,11 +143,10 @@ const Admin = () => {
     setLoading(true);
     try {
       // 1. Create a "Pre-Provisioned" entry in user_invites
-      // Note: We'll create this table in SQL. It stores the details 
-      // and permissions until the user actually signs up with this email.
       const { error } = await supabase.from('user_invites').upsert({
         email: currentSlot.email.toLowerCase(),
         full_name: currentSlot.name,
+        phone: currentSlot.phone,
         role: currentSlot.role,
         permissions: currentSlot.permissions
       });
@@ -278,22 +277,6 @@ const Admin = () => {
                     className="pl-10 bg-secondary/30 border-border"
                   />
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="password">Login Password</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input 
-                    id="password" 
-                    type="password" 
-                    placeholder="••••••••" 
-                    value={currentSlot.password || ""} 
-                    onChange={(e) => handleUpdateSlot("password", e.target.value)}
-                    className="pl-10 bg-secondary/30 border-border"
-                  />
-                </div>
-                <p className="text-[10px] text-muted-foreground">Used for user's initial login credentials.</p>
               </div>
 
               <div className="space-y-2">
