@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import Papa from "papaparse";
-import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio, Download, Trash2, Search, Filter } from "lucide-react";
+import { Upload, ChevronDown, ChevronRight, Phone, Play, Pause, CheckCircle, XCircle, Clock, FileAudio, Download, Trash2, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -28,6 +28,8 @@ const callStatusIcons: Record<string, { icon: React.ElementType; color: string; 
 
 const defaultWorkHours = { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" };
 
+type SortConfig = { key: keyof CallRecord; direction: 'asc' | 'desc' } | null;
+
 const Campaigns = () => {
   const { campaigns = [], isLoading, createCampaign, updateCampaign: updateDBCampaign, addCallRecords, deleteCampaign, deleteCallRecord } = useCampaigns();
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
@@ -39,13 +41,25 @@ const Campaigns = () => {
   
   // Bulk selection and filters
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
-  const [filters, setFilters] = useState<{ name?: string; phone?: string; email?: string; status?: string }>({});
+  const [filters, setFilters] = useState<{ name?: string; phone?: string; email?: string; status?: string; duration?: string; date?: string }>({});
+  const [sortConfig, setSortConfig] = useState<SortConfig>(null);
 
   // Reset selections when campaign changes
   const handleCampaignClick = (campaignId: string) => {
     setExpandedCampaign(expandedCampaign === campaignId ? null : campaignId);
     setSelectedLeadIds(new Set()); // Clear selection when switching campaigns
     setFilters({}); // Clear filters when switching campaigns
+    setSortConfig(null); // Clear sort when switching campaigns
+  };
+
+  const handleSort = (key: keyof CallRecord) => {
+    setSortConfig(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
   };
 
   const toggleSelectLead = (id: string) => {
@@ -79,14 +93,29 @@ const Campaigns = () => {
     }
   };
 
-  const getFilteredRecords = (records: CallRecord[]) => {
-    return records.filter(r => {
+  const getFilteredAndSortedRecords = (records: CallRecord[]) => {
+    let result = records.filter(r => {
       const matchesName = !filters.name || r.name.toLowerCase().includes(filters.name.toLowerCase());
       const matchesPhone = !filters.phone || r.phone.includes(filters.phone);
       const matchesEmail = !filters.email || r.email.toLowerCase().includes(filters.email.toLowerCase());
       const matchesStatus = !filters.status || r.status === filters.status;
-      return matchesName && matchesPhone && matchesEmail && matchesStatus;
+      const matchesDuration = !filters.duration || (r.duration || "").toLowerCase().includes(filters.duration.toLowerCase());
+      const matchesDate = !filters.date || (r.callDate || "").toLowerCase().includes(filters.date.toLowerCase());
+      return matchesName && matchesPhone && matchesEmail && matchesStatus && matchesDuration && matchesDate;
     });
+
+    if (sortConfig) {
+      result = [...result].sort((a, b) => {
+        const aVal = a[sortConfig.key] || "";
+        const bVal = b[sortConfig.key] || "";
+        
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
   };
 
   const downloadExampleCSV = () => {
@@ -205,6 +234,11 @@ const Campaigns = () => {
     } catch (err: any) {
       toast.error(`Failed to delete lead: ${err.message}`);
     }
+  };
+
+  const SortIcon = ({ column }: { column: keyof CallRecord }) => {
+    if (sortConfig?.key !== column) return <ArrowUpDown className="ml-1.5 h-3 w-3 text-muted-foreground/50" />;
+    return sortConfig.direction === 'asc' ? <ArrowUp className="ml-1.5 h-3 w-3 text-primary" /> : <ArrowDown className="ml-1.5 h-3 w-3 text-primary" />;
   };
 
   if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading campaigns from database...</div>;
@@ -365,7 +399,7 @@ const Campaigns = () => {
                       <TabsList className="bg-secondary">
                         <TabsTrigger value="all" className="text-xs">All ({campaign.records.length})</TabsTrigger>
                         <TabsTrigger value="completed" className="text-xs">Completed ({campaign.records.filter(r => r.status === "completed").length})</TabsTrigger>
-                        <TabsTrigger value="pending" className="text-xs">Pending ({campaign.records.filter(r => r.status === "pending").length})</TabsTrigger>
+                        <TabsTrigger value="pending" className="text-xs">Pending ({campaign.records.filter(r => r.status === "pending" || r.status === "in-progress").length})</TabsTrigger>
                         <TabsTrigger value="failed" className="text-xs">Failed ({campaign.records.filter(r => ["failed", "no-answer"].includes(r.status)).length})</TabsTrigger>
                       </TabsList>
                       
@@ -393,7 +427,7 @@ const Campaigns = () => {
                       return true;
                     });
                     
-                    const filteredRecords = getFilteredRecords(tabRecords);
+                    const filteredRecords = getFilteredAndSortedRecords(tabRecords);
                     const allFilteredIds = filteredRecords.map(r => r.id);
                     const isAllSelected = filteredRecords.length > 0 && filteredRecords.every(r => selectedLeadIds.has(r.id));
 
@@ -411,7 +445,12 @@ const Campaigns = () => {
                                 </th>
                                 <th className="text-left text-xs font-medium text-muted-foreground p-3">
                                   <div className="flex flex-col gap-1.5">
-                                    <span>Name</span>
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('name')}
+                                    >
+                                      Name <SortIcon column="name" />
+                                    </button>
                                     <div className="relative">
                                       <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                                       <Input 
@@ -425,7 +464,12 @@ const Campaigns = () => {
                                 </th>
                                 <th className="text-left text-xs font-medium text-muted-foreground p-3">
                                   <div className="flex flex-col gap-1.5">
-                                    <span>Phone</span>
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('phone')}
+                                    >
+                                      Phone <SortIcon column="phone" />
+                                    </button>
                                     <Input 
                                       placeholder="Filter..." 
                                       className="h-6 text-[10px] px-2 bg-background border-border w-24"
@@ -436,7 +480,12 @@ const Campaigns = () => {
                                 </th>
                                 <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden md:table-cell">
                                   <div className="flex flex-col gap-1.5">
-                                    <span>Email</span>
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('email')}
+                                    >
+                                      Email <SortIcon column="email" />
+                                    </button>
                                     <Input 
                                       placeholder="Filter..." 
                                       className="h-6 text-[10px] px-2 bg-background border-border w-32"
@@ -445,9 +494,62 @@ const Campaigns = () => {
                                     />
                                   </div>
                                 </th>
-                                <th className="text-left text-xs font-medium text-muted-foreground p-3">Status</th>
-                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">Duration</th>
-                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell whitespace-nowrap">Date</th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3">
+                                  <div className="flex flex-col gap-1.5">
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('status')}
+                                    >
+                                      Status <SortIcon column="status" />
+                                    </button>
+                                    <Select 
+                                      value={filters.status || "all"} 
+                                      onValueChange={(val) => setFilters({...filters, status: val === "all" ? undefined : val})}
+                                    >
+                                      <SelectTrigger className="h-6 text-[10px] px-2 bg-background border-border w-28">
+                                        <SelectValue placeholder="Status" />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-card border-border">
+                                        <SelectItem value="all" className="text-xs">All</SelectItem>
+                                        {Object.entries(callStatusIcons).map(([key, conf]) => (
+                                          <SelectItem key={key} value={key} className="text-xs">{conf.label}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell">
+                                  <div className="flex flex-col gap-1.5">
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('duration')}
+                                    >
+                                      Duration <SortIcon column="duration" />
+                                    </button>
+                                    <Input 
+                                      placeholder="Filter..." 
+                                      className="h-6 text-[10px] px-2 bg-background border-border w-16"
+                                      value={filters.duration || ""}
+                                      onChange={(e) => setFilters({...filters, duration: e.target.value})}
+                                    />
+                                  </div>
+                                </th>
+                                <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden lg:table-cell whitespace-nowrap">
+                                  <div className="flex flex-col gap-1.5">
+                                    <button 
+                                      className="flex items-center hover:text-foreground transition-colors outline-none"
+                                      onClick={() => handleSort('callDate')}
+                                    >
+                                      Date <SortIcon column="callDate" />
+                                    </button>
+                                    <Input 
+                                      placeholder="Filter..." 
+                                      className="h-6 text-[10px] px-2 bg-background border-border w-20"
+                                      value={filters.date || ""}
+                                      onChange={(e) => setFilters({...filters, date: e.target.value})}
+                                    />
+                                  </div>
+                                </th>
                                 <th className="text-left text-xs font-medium text-muted-foreground p-3 hidden xl:table-cell">Notes</th>
                                 <th className="text-left text-xs font-medium text-muted-foreground p-3">Recording</th>
                                 <th className="p-3 w-10 text-right"></th>
