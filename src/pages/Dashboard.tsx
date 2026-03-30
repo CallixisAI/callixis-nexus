@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useDashboardStats } from "@/hooks/useDashboardStats";
 import {
   Phone,
@@ -21,7 +21,6 @@ import {
   Plus,
   Trash2,
   Layout,
-  Settings,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +50,18 @@ import {
 } from "recharts";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
 
+// ── types ─────────────────────────────────────────────
+type WidgetType = 'kpi' | 'chart-large' | 'chart-small' | 'table-large' | 'table-small' | 'activity';
+
+interface DashboardWidget {
+  id: string;
+  type: WidgetType;
+  title: string;
+  category?: string;
+  component: string;
+  width: 'full' | 'half' | 'third' | 'sixth' | 'twothirds';
+}
+
 // ── icon map ──────────────────────────────────────────
 const iconMap: Record<string, React.ElementType> = {
   TrendingUp,
@@ -68,7 +79,7 @@ const iconMap: Record<string, React.ElementType> = {
   Cpu,
 };
 
-const activityTypeColor = {
+const activityTypeColor: Record<string, string> = {
   success: "text-primary",
   info: "text-chart-2",
   neutral: "text-muted-foreground",
@@ -86,7 +97,6 @@ const tooltipStyle = {
 function useAnimatedNumber(target: number, duration = 1200) {
   const [value, setValue] = useState(0);
   useEffect(() => {
-    let start = 0;
     const startTime = performance.now();
     const tick = (now: number) => {
       const elapsed = now - startTime;
@@ -98,18 +108,6 @@ function useAnimatedNumber(target: number, duration = 1200) {
     requestAnimationFrame(tick);
   }, [target, duration]);
   return value;
-}
-
-// ── types ─────────────────────────────────────────────
-type WidgetType = 'kpi' | 'chart-large' | 'chart-small' | 'table-large' | 'table-small' | 'activity';
-
-interface DashboardWidget {
-  id: string;
-  type: WidgetType;
-  title: string;
-  category?: string;
-  component: string;
-  width: 'full' | 'half' | 'third' | 'sixth' | 'twothirds';
 }
 
 const AVAILABLE_WIDGETS: DashboardWidget[] = [
@@ -182,7 +180,7 @@ interface ChartWidgetProps {
 }
 
 const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: ChartWidgetProps) => (
-  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col`}>
+  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
     <div className="flex items-center justify-between mb-4 shrink-0">
       <div className="flex items-center gap-2">
         <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
@@ -198,7 +196,7 @@ const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: ChartW
         <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
       </div>
     </div>
-    <div className="flex-1 min-h-0">
+    <div className="flex-1 min-h-0 relative z-10">
       {children}
     </div>
   </Card>
@@ -213,8 +211,12 @@ const Dashboard = () => {
   
   // Widget management
   const [activeWidgets, setActiveWidgets] = useState<string[]>(() => {
-    const saved = localStorage.getItem('dashboard-widgets');
-    return saved ? JSON.parse(saved) : AVAILABLE_WIDGETS.map(w => w.id);
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('dashboard-widgets') : null;
+      return saved ? JSON.parse(saved) : AVAILABLE_WIDGETS.map(w => w.id);
+    } catch (e) {
+      return AVAILABLE_WIDGETS.map(w => w.id);
+    }
   });
 
   useEffect(() => {
@@ -232,23 +234,24 @@ const Dashboard = () => {
     return () => clearInterval(id);
   }, []);
 
-  const onDragEnd = (result: DropResult) => {
+  const onDragEnd = useCallback((result: DropResult) => {
     if (!result.destination) return;
     const items = Array.from(activeWidgets);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
     setActiveWidgets(items);
-  };
+  }, [activeWidgets]);
 
-  const removeWidget = (id: string) => {
-    setActiveWidgets(activeWidgets.filter(wId => wId !== id));
-  };
+  const removeWidget = useCallback((id: string) => {
+    setActiveWidgets(prev => prev.filter(wId => wId !== id));
+  }, []);
 
-  const addWidget = (id: string) => {
-    if (!activeWidgets.includes(id)) {
-      setActiveWidgets([...activeWidgets, id]);
-    }
-  };
+  const addWidget = useCallback((id: string) => {
+    setActiveWidgets(prev => {
+      if (prev.includes(id)) return prev;
+      return [...prev, id];
+    });
+  }, []);
 
   if (isLoading || !data) {
     return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading real-time metrics...</div>;
@@ -289,17 +292,20 @@ const Dashboard = () => {
       );
       case 'chart-channels': return (
         <ChartWidget key={id} title="Channel Distribution" subtitle="Leads by communication channel" onRemove={() => removeWidget(id)} widthClass="w-full">
-          <div className="flex justify-center">
-            <PieChart width={180} height={180}>
-              <Pie data={channelData} cx={90} cy={90} innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value" strokeWidth={0}>
-                {channelData.map((entry, i) => (
-                  <Cell key={i} fill={entry.fill} />
-                ))}
-              </Pie>
-            </PieChart>
+          <div className="flex justify-center h-full">
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={channelData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value" strokeWidth={0}>
+                  {channelData.map((entry: any, i: number) => (
+                    <Cell key={i} fill={entry.fill} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            {channelData.map((ch) => (
+          <div className="grid grid-cols-2 gap-2 mt-4">
+            {channelData.map((ch: any) => (
               <div key={ch.name} className="flex items-center gap-2 text-xs">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ch.fill }} />
                 <span className="text-muted-foreground">{ch.name}</span>
@@ -312,7 +318,7 @@ const Dashboard = () => {
       case 'perf-industry': return (
         <ChartWidget key={id} title="Industry Performance" subtitle="AI performance by vertical" onRemove={() => removeWidget(id)} widthClass="w-full">
           <div className="space-y-4">
-            {agentPerformance.map((ind) => (
+            {agentPerformance.map((ind: any) => (
               <div key={ind.name}>
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-3">
@@ -333,7 +339,7 @@ const Dashboard = () => {
       case 'live-agents': return (
         <ChartWidget key={id} title="Live Agent Feed" subtitle="Real-time agent status" onRemove={() => removeWidget(id)} widthClass="w-full">
           <div className="space-y-3">
-            {liveAgents.map((agent) => (
+            {liveAgents.map((agent: any) => (
               <div key={agent.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 transition-colors">
                 <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                   <Bot className="h-4 w-4 text-primary" />
@@ -356,7 +362,7 @@ const Dashboard = () => {
       case 'activity-stream': return (
         <ChartWidget key={id} title="Activity Stream" subtitle="AI system events & milestones" onRemove={() => removeWidget(id)} widthClass="w-full">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {recentActivity.map((item, i) => {
+            {recentActivity.map((item: any, i: number) => {
               const Icon = iconMap[item.icon] || Activity;
               return (
                 <div key={i} className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/10 hover:bg-muted/20 transition-colors">
