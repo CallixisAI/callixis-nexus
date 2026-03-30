@@ -178,7 +178,7 @@ const Admin = () => {
     return (
       <div className="h-[60vh] flex flex-col items-center justify-center gap-4">
         <Loader2 className="h-8 w-8 text-primary animate-spin" />
-        <p className="text-muted-foreground animate-pulse">Syncing with Nexus Database...</p>
+        <p className="text-muted-foreground animate-pulse">Syncing with CalliXis AI Database...</p>
       </div>
     );
   }

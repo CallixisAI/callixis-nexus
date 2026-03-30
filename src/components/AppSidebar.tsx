@@ -79,10 +79,10 @@ export function AppSidebar() {
         {/* Brand */}
         <div className={`flex flex-col px-4 py-5 ${collapsed ? "items-center" : ""}`}>
           <div className={`flex items-center gap-3 ${collapsed ? "justify-center" : ""}`}>
-            <img src={callixisLogo} alt="Callixis" width={32} height={32} />
+            <img src={callixisLogo} alt="CalliXis AI" width={32} height={32} />
             {!collapsed && (
               <span className="text-lg font-display tracking-tight text-foreground">
-                Callixis<span className="text-gradient-cyan">-AI</span>
+                CalliXis<span className="text-gradient-cyan">-AI</span>
               </span>
             )}
           </div>

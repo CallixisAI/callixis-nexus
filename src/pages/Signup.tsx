@@ -59,7 +59,7 @@ const Signup = () => {
     // once the user is confirmed. For now, we just redirect.
     setLoading(false);
     toast({
-      title: "Welcome to the Nexus",
+      title: "Welcome to CalliXis AI",
       description: "Please verify your email to activate your pre-configured permissions.",
     });
     navigate("/login");
