@@ -40,7 +40,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   ResponsiveContainer,
   BarChart,
   Bar,
@@ -48,6 +48,12 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
 
 // ── types ─────────────────────────────────────────────
@@ -60,6 +66,7 @@ interface DashboardWidget {
   category?: string;
   component: string;
   width: 'full' | 'half' | 'third' | 'sixth' | 'twothirds';
+  description: string;
 }
 
 // ── icon map ──────────────────────────────────────────
@@ -111,17 +118,17 @@ function useAnimatedNumber(target: number, duration = 1200) {
 }
 
 const AVAILABLE_WIDGETS: DashboardWidget[] = [
-  { id: 'stat-calls', type: 'kpi', title: 'Total Calls', component: 'TotalCalls', width: 'sixth' },
-  { id: 'stat-leads', type: 'kpi', title: 'Active Leads', component: 'ActiveLeads', width: 'sixth' },
-  { id: 'stat-conv', type: 'kpi', title: 'Conversion', component: 'Conversion', width: 'sixth' },
-  { id: 'stat-rev', type: 'kpi', title: 'Revenue', component: 'Revenue', width: 'sixth' },
-  { id: 'stat-agents', type: 'kpi', title: 'AI Agents', component: 'AiAgents', width: 'sixth' },
-  { id: 'stat-resp', type: 'kpi', title: 'Avg Response', component: 'AvgResponse', width: 'sixth' },
-  { id: 'chart-volume', type: 'chart-large', title: 'Call Volume & Conversions', component: 'CallVolumeChart', width: 'twothirds' },
-  { id: 'chart-channels', type: 'chart-small', title: 'Channel Distribution', component: 'ChannelChart', width: 'third' },
-  { id: 'perf-industry', type: 'table-large', title: 'Industry Performance', component: 'IndustryPerformance', width: 'twothirds' },
-  { id: 'live-agents', type: 'table-small', title: 'Live Agent Feed', component: 'LiveAgentFeed', width: 'third' },
-  { id: 'activity-stream', type: 'activity', title: 'Activity Stream', component: 'ActivityStream', width: 'full' },
+  { id: 'stat-calls', type: 'kpi', title: 'Total Calls', component: 'TotalCalls', width: 'sixth', description: 'Real-time count of all outbound calls made across all campaigns.' },
+  { id: 'stat-leads', type: 'kpi', title: 'Active Leads', component: 'ActiveLeads', width: 'sixth', description: 'Number of leads currently being processed or qualified by AI agents.' },
+  { id: 'stat-conv', type: 'kpi', title: 'Conversion', component: 'Conversion', width: 'sixth', description: 'Percentage of calls that resulted in a successful conversion or qualified lead.' },
+  { id: 'stat-rev', type: 'kpi', title: 'Revenue', component: 'Revenue', width: 'sixth', description: 'Estimated revenue generated from converted leads based on campaign value.' },
+  { id: 'stat-agents', type: 'kpi', title: 'AI Agents', component: 'AiAgents', width: 'sixth', description: 'Number of AI agents currently active or scheduled to deploy.' },
+  { id: 'stat-resp', type: 'kpi', title: 'Avg Response', component: 'AvgResponse', width: 'sixth', description: 'Average time for an AI agent to initiate a call or respond to a trigger.' },
+  { id: 'chart-volume', type: 'chart-large', title: 'Call Volume & Conversions', component: 'CallVolumeChart', width: 'twothirds', description: 'Historical view of call volume and conversion trends over the selected timeframe.' },
+  { id: 'chart-channels', type: 'chart-small', title: 'Channel Distribution', component: 'ChannelChart', width: 'third', description: 'Breakdown of leads by their initial communication channel (Voice, SMS, Email, etc.).' },
+  { id: 'perf-industry', type: 'table-large', title: 'Industry Performance', component: 'IndustryPerformance', width: 'twothirds', description: 'Comparative performance metrics across different industry verticals.' },
+  { id: 'live-agents', type: 'table-small', title: 'Live Agent Feed', component: 'LiveAgentFeed', width: 'third', description: 'Real-time status updates from active AI agents including current call duration.' },
+  { id: 'activity-stream', type: 'activity', title: 'Activity Stream', component: 'ActivityStream', width: 'full', description: 'Sequential feed of all AI system events, milestones, and qualifying outcomes.' },
 ];
 
 // ── widget components ──────────────────────────────────
@@ -136,38 +143,50 @@ interface StatCardProps {
   onRemove: () => void;
 }
 
-const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove }: StatCardProps) => {
+const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove, description }: StatCardProps & { description?: string }) => {
   const animatedValue = useAnimatedNumber(value);
   const changeColor = changeType === "up" ? "text-primary" : changeType === "down" ? "text-destructive" : "text-muted-foreground";
   const ChangeIcon = changeType === "up" ? ArrowUpRight : changeType === "down" ? ArrowDownRight : Activity;
 
   return (
-    <div className="group relative bg-card rounded-xl border border-border p-5 transition-all duration-300 hover:border-primary/30 overflow-hidden h-full">
-      <div className="absolute inset-0 neural-grid opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-      <div className="relative z-10">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={onRemove}>
-              <Trash2 className="h-3 w-3" />
-            </Button>
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-              <Icon className="h-4 w-4 text-primary" />
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="group relative bg-card rounded-xl border border-border p-5 transition-all duration-300 hover:border-primary/30 overflow-hidden h-full cursor-help">
+            <div className="absolute inset-0 neural-grid opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                    <Icon className="h-4 w-4 text-primary" />
+                  </div>
+                </div>
+              </div>
+              <div className="text-3xl font-bold text-foreground font-body tracking-tight">
+                {prefix}{animatedValue.toLocaleString()}{suffix}
+              </div>
+              <div className={`flex items-center gap-1 mt-2 text-xs ${changeColor}`}>
+                <ChangeIcon className="h-3 w-3" />
+                <span>{change}</span>
+              </div>
             </div>
           </div>
-        </div>
-        <div className="text-3xl font-bold text-foreground font-body tracking-tight">
-          {prefix}{animatedValue.toLocaleString()}{suffix}
-        </div>
-        <div className={`flex items-center gap-1 mt-2 text-xs ${changeColor}`}>
-          <ChangeIcon className="h-3 w-3" />
-          <span>{change}</span>
-        </div>
-      </div>
-    </div>
+        </TooltipTrigger>
+        {description && (
+          <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[200px]">
+            <p className="font-semibold mb-1">{title}</p>
+            <p className="text-muted-foreground leading-relaxed">{description}</p>
+          </TooltipContent>
+        )}
+      </Tooltip>
+    </TooltipProvider>
   );
 };
 
@@ -177,29 +196,42 @@ interface ChartWidgetProps {
   children: React.ReactNode;
   onRemove: () => void;
   widthClass: string;
+  description?: string;
 }
 
-const ChartWidget = ({ title, subtitle, children, onRemove, widthClass }: ChartWidgetProps) => (
-  <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
-    <div className="flex items-center justify-between mb-4 shrink-0">
-      <div className="flex items-center gap-2">
-        <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={onRemove}>
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-        <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
-      </div>
-    </div>
-    <div className="flex-1 min-h-0 relative z-10">
-      {children}
-    </div>
-  </Card>
+const ChartWidget = ({ title, subtitle, children, onRemove, widthClass, description }: ChartWidgetProps) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
+          <div className="flex items-center justify-between mb-4 shrink-0">
+            <div className="flex items-center gap-2">
+              <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+                {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+              <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 relative z-10">
+            {children}
+          </div>
+        </Card>
+      </TooltipTrigger>
+      {description && (
+        <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[250px]">
+          <p className="font-semibold mb-1">{title}</p>
+          <p className="text-muted-foreground leading-relaxed">{description}</p>
+        </TooltipContent>
+      )}
+    </Tooltip>
+  </TooltipProvider>
 );
 
 // ── main component ─────────────────────────────────────
@@ -265,14 +297,14 @@ const Dashboard = () => {
     if (!widget) return null;
 
     switch (widget.id) {
-      case 'stat-calls': return <StatCard key={id} title="Total Calls" value={stats.totalCalls} change="+12.5%" changeType="up" icon={Phone} onRemove={() => removeWidget(id)} />;
-      case 'stat-leads': return <StatCard key={id} title="Active Leads" value={stats.activeLeads} change="+8.2%" changeType="up" icon={Users} onRemove={() => removeWidget(id)} />;
-      case 'stat-conv': return <StatCard key={id} title="Conversion" value={stats.conversion} suffix="%" change="+2.1%" changeType="up" icon={TrendingUp} onRemove={() => removeWidget(id)} />;
-      case 'stat-rev': return <StatCard key={id} title="Revenue" value={Math.round(stats.revenue / 1000)} prefix="$" suffix="K" change="+18.3%" changeType="up" icon={DollarSign} onRemove={() => removeWidget(id)} />;
-      case 'stat-agents': return <StatCard key={id} title="AI Agents" value={stats.aiAgentsCount} change="3 deploying" changeType="neutral" icon={Bot} onRemove={() => removeWidget(id)} />;
-      case 'stat-resp': return <StatCard key={id} title="Avg Response" value={stats.avgResponseTime} suffix="s" change="-0.3s" changeType="up" icon={Clock} onRemove={() => removeWidget(id)} />;
+      case 'stat-calls': return <StatCard key={id} title="Total Calls" value={stats.totalCalls} change="+12.5%" changeType="up" icon={Phone} onRemove={() => removeWidget(id)} description={widget.description} />;
+      case 'stat-leads': return <StatCard key={id} title="Active Leads" value={stats.activeLeads} change="+8.2%" changeType="up" icon={Users} onRemove={() => removeWidget(id)} description={widget.description} />;
+      case 'stat-conv': return <StatCard key={id} title="Conversion" value={stats.conversion} suffix="%" change="+2.1%" changeType="up" icon={TrendingUp} onRemove={() => removeWidget(id)} description={widget.description} />;
+      case 'stat-rev': return <StatCard key={id} title="Revenue" value={Math.round(stats.revenue / 1000)} prefix="$" suffix="K" change="+18.3%" changeType="up" icon={DollarSign} onRemove={() => removeWidget(id)} description={widget.description} />;
+      case 'stat-agents': return <StatCard key={id} title="AI Agents" value={stats.aiAgentsCount} change="3 deploying" changeType="neutral" icon={Bot} onRemove={() => removeWidget(id)} description={widget.description} />;
+      case 'stat-resp': return <StatCard key={id} title="Avg Response" value={stats.avgResponseTime} suffix="s" change="-0.3s" changeType="up" icon={Clock} onRemove={() => removeWidget(id)} description={widget.description} />;
       case 'chart-volume': return (
-        <ChartWidget key={id} title="Call Volume & Conversions" subtitle="Real-time AI agent performance" onRemove={() => removeWidget(id)} widthClass="w-full">
+        <ChartWidget key={id} title="Call Volume & Conversions" subtitle="Real-time AI agent performance" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={callData}>
               <defs>
@@ -284,7 +316,7 @@ const Dashboard = () => {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 14%, 14%)" />
               <XAxis dataKey="name" stroke="hsl(215, 12%, 40%)" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke="hsl(215, 12%, 40%)" fontSize={11} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <RechartsTooltip contentStyle={tooltipStyle} />
               <Area type="monotone" dataKey="calls" stroke="hsl(170, 100%, 45%)" fill="url(#callGrad)" strokeWidth={2.5} dot={false} />
               <Area type="monotone" dataKey="conversions" stroke="hsl(200, 80%, 55%)" fill="none" strokeWidth={2} dot={false} />
             </AreaChart>
@@ -292,7 +324,7 @@ const Dashboard = () => {
         </ChartWidget>
       );
       case 'chart-channels': return (
-        <ChartWidget key={id} title="Channel Distribution" subtitle="Leads by communication channel" onRemove={() => removeWidget(id)} widthClass="w-full">
+        <ChartWidget key={id} title="Channel Distribution" subtitle="Leads by communication channel" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
           <div className="flex justify-center h-full">
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
@@ -301,7 +333,7 @@ const Dashboard = () => {
                     <Cell key={i} fill={entry.fill} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={tooltipStyle} />
+                <RechartsTooltip contentStyle={tooltipStyle} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -317,7 +349,7 @@ const Dashboard = () => {
         </ChartWidget>
       );
       case 'perf-industry': return (
-        <ChartWidget key={id} title="Industry Performance" subtitle="AI performance by vertical" onRemove={() => removeWidget(id)} widthClass="w-full">
+        <ChartWidget key={id} title="Industry Performance" subtitle="AI performance by vertical" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
           <div className="space-y-4">
             {agentPerformance.map((ind: any) => (
               <div key={ind.name}>
@@ -338,7 +370,7 @@ const Dashboard = () => {
         </ChartWidget>
       );
       case 'live-agents': return (
-        <ChartWidget key={id} title="Live Agent Feed" subtitle="Real-time agent status" onRemove={() => removeWidget(id)} widthClass="w-full">
+        <ChartWidget key={id} title="Live Agent Feed" subtitle="Real-time agent status" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
           <div className="space-y-3">
             {liveAgents.map((agent: any) => (
               <div key={agent.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 transition-colors">
@@ -361,7 +393,7 @@ const Dashboard = () => {
         </ChartWidget>
       );
       case 'activity-stream': return (
-        <ChartWidget key={id} title="Activity Stream" subtitle="AI system events & milestones" onRemove={() => removeWidget(id)} widthClass="w-full">
+        <ChartWidget key={id} title="Activity Stream" subtitle="AI system events & milestones" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {recentActivity.map((item: any, i: number) => {
               const Icon = iconMap[item.icon] || Activity;
