@@ -18,7 +18,9 @@ import {
   CalendarCheck,
   Settings,
   Lock,
-  Loader2
+  Loader2,
+  Copy,
+  ExternalLink
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -139,30 +141,31 @@ const Admin = () => {
 
     setLoading(true);
     try {
-      // Call the Edge Function
-      const { data, error } = await supabase.functions.invoke('manage-users', {
-        body: { 
-          email: currentSlot.email, 
-          full_name: currentSlot.name, 
-          role: currentSlot.role, 
-          permissions: currentSlot.permissions 
-        }
+      // 1. Create a "Pre-Provisioned" entry in user_invites
+      // Note: We'll create this table in SQL. It stores the details 
+      // and permissions until the user actually signs up with this email.
+      const { error } = await supabase.from('user_invites').upsert({
+        email: currentSlot.email.toLowerCase(),
+        full_name: currentSlot.name,
+        role: currentSlot.role,
+        permissions: currentSlot.permissions
       });
 
       if (error) throw error;
 
-      if (data?.success) {
-        handleUpdateSlot("auth_id", data.user_id);
-        handleUpdateSlot("isCreated", true);
-        toast.success(`Invite sent to ${currentSlot.email}! User provisioned in Nexus.`);
-      }
-    } catch (err: any) {
-      toast.error(`Error: ${err.message || "Failed to call invitation system."}`);
-      // Fallback for UI testing
       handleUpdateSlot("isCreated", true);
+      toast.success(`Invitation ready for ${currentSlot.email}!`);
+    } catch (err: any) {
+      toast.error(`Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  const copyInviteLink = () => {
+    const link = `${window.location.origin}/signup?email=${encodeURIComponent(currentSlot.email)}`;
+    navigator.clipboard.writeText(link);
+    toast.success("Invite link copied to clipboard!");
   };
 
   const handleImpersonate = () => {
@@ -364,21 +367,31 @@ const Admin = () => {
                   onClick={handleCreateUser}
                   disabled={loading}
                 >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (currentSlot.isCreated ? "Update User Profile" : "Send Invite & Grant Access")}
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (currentSlot.isCreated ? "Update Invitation" : "Create Invitation Link")}
                 </Button>
                 
                 {currentSlot.isCreated && (
-                  <div className="flex gap-2">
-                    <Button 
-                      variant="outline" 
-                      className="flex-1 border-primary/30 text-primary hover:bg-primary/10 gap-2"
-                      onClick={handleImpersonate}
-                    >
-                      <Users className="h-4 w-4" /> Login as {currentSlot.name.split(' ')[0]}
-                    </Button>
-                    <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => handleUpdateSlot("isCreated", false)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <div className="space-y-2">
+                    <div className="p-3 bg-secondary/50 rounded-lg border border-dashed border-primary/30 flex items-center justify-between">
+                      <span className="text-[10px] font-mono truncate text-muted-foreground">
+                        {window.location.origin}/signup?email={currentSlot.email}
+                      </span>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-primary" onClick={copyInviteLink}>
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button 
+                        variant="outline" 
+                        className="flex-1 border-primary/30 text-primary hover:bg-primary/10 gap-2"
+                        onClick={handleImpersonate}
+                      >
+                        <Users className="h-4 w-4" /> Login as {currentSlot.name.split(' ')[0]}
+                      </Button>
+                      <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => handleUpdateSlot("isCreated", false)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>

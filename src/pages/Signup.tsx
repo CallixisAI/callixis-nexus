@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,17 +9,38 @@ import callixisLogo from "@/assets/callixis-logo.png";
 
 const Signup = () => {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [searchParams] = useSearchParams();
+  const [email, setEmail] = useState(searchParams.get("email") || "");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState<"affiliate" | "brand">("affiliate");
   const [loading, setLoading] = useState(false);
+  const [isInvited, setIsInvited] = useState(false);
+
+  // Check if this email has a pre-provisioned invite
+  useEffect(() => {
+    const checkInvite = async () => {
+      if (!email) return;
+      const { data } = await supabase
+        .from('user_invites')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .single();
+      
+      if (data) {
+        setFullName(data.full_name);
+        setRole(data.role);
+        setIsInvited(true);
+      }
+    };
+    checkInvite();
+  }, [email]);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -28,17 +49,20 @@ const Signup = () => {
       },
     });
 
-    setLoading(false);
-
     if (error) {
+      setLoading(false);
       toast({ title: "Signup failed", description: error.message, variant: "destructive" });
       return;
     }
 
+    // If invited, the backend trigger (SQL) will handle transferring permissions
+    // once the user is confirmed. For now, we just redirect.
+    setLoading(false);
     toast({
-      title: "Check your email",
-      description: "We sent you a verification link. Please verify your email to sign in.",
+      title: "Welcome to the Nexus",
+      description: "Please verify your email to activate your pre-configured permissions.",
     });
+    navigate("/login");
   };
 
   return (
