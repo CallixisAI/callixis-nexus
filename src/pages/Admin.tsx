@@ -157,22 +157,32 @@ const Admin = () => {
 
     setLoading(true);
     try {
+      // Use upsert to handle both first-time invites and updates
       const { error } = await supabase.from('user_invites').upsert({
-        email: newInvite.email.toLowerCase(),
-        full_name: newInvite.name,
+        email: newInvite.email.toLowerCase().trim(),
+        full_name: newInvite.name.trim(),
         role: newInvite.role,
         permissions: newInvite.permissions,
         status: 'pending'
-      });
+      }, { onConflict: 'email' });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Supabase Error:", error);
+        throw new Error(error.message);
+      }
 
-      toast.success(`Invitation ready for ${newInvite.email}`);
+      toast.success(`Magic Link ready for ${newInvite.email}`);
       setIsInviteModalOpen(false);
+      
+      // Copy the link immediately for convenience
+      const link = `${window.location.origin}/signup?email=${encodeURIComponent(newInvite.email.toLowerCase().trim())}`;
+      navigator.clipboard.writeText(link);
+      toast.info("Link copied to clipboard automatically!");
+
       setNewInvite({ name: "", email: "", phone: "", role: "brand", permissions: ["dashboard"] });
       fetchUsers();
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(`Database Blocked: ${err.message}. Ensure you are an Admin in the user_roles table.`);
     } finally {
       setLoading(false);
     }
