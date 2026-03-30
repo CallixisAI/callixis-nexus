@@ -142,9 +142,10 @@ interface StatCardProps {
   changeType: "up" | "down" | "neutral";
   icon: React.ElementType;
   onRemove: () => void;
+  description: string;
 }
 
-const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove, description }: StatCardProps & { description?: string }) => {
+const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, icon: Icon, onRemove, description }: StatCardProps) => {
   const animatedValue = useAnimatedNumber(value);
   const changeColor = changeType === "up" ? "text-primary" : changeType === "down" ? "text-destructive" : "text-muted-foreground";
   const ChangeIcon = changeType === "up" ? ArrowUpRight : changeType === "down" ? ArrowDownRight : Activity;
@@ -154,26 +155,24 @@ const StatCard = ({ title, value, prefix = "", suffix = "", change, changeType, 
       <div className="absolute inset-0 neural-grid opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
       <div className="relative z-10">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
-          </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity shrink-0" />
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider truncate">{title}</span>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors">
+                  <button className="text-muted-foreground hover:text-foreground transition-colors outline-none shrink-0">
                     <Info className="h-3 w-3" />
-                  </Button>
+                  </button>
                 </TooltipTrigger>
-                {description && (
-                  <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[200px]">
-                    <p className="font-semibold mb-1">{title}</p>
-                    <p className="text-muted-foreground leading-relaxed">{description}</p>
-                  </TooltipContent>
-                )}
+                <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[200px] z-50">
+                  <p className="font-semibold mb-1">{title}</p>
+                  <p className="text-muted-foreground leading-relaxed">{description}</p>
+                </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          </div>
+          <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
               <Trash2 className="h-3 w-3" />
             </Button>
@@ -200,42 +199,42 @@ interface ChartWidgetProps {
   children: React.ReactNode;
   onRemove: () => void;
   widthClass: string;
-  description?: string;
+  description: string;
 }
 
 const ChartWidget = ({ title, subtitle, children, onRemove, widthClass, description }: ChartWidgetProps) => (
   <Card className={`${widthClass} bg-card border-border p-5 group relative h-full flex flex-col overflow-hidden`}>
     <div className="flex items-center justify-between mb-4 shrink-0">
-      <div className="flex items-center gap-2">
-        <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity" />
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+      <div className="flex items-center gap-2 min-w-0">
+        <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity shrink-0" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground truncate">{title}</h3>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button className="text-muted-foreground hover:text-foreground transition-colors outline-none shrink-0">
+                    <Info className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[250px] z-50">
+                  <p className="font-semibold mb-1">{title}</p>
+                  <p className="text-muted-foreground leading-relaxed">{description}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          {subtitle && <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitle}</p>}
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors">
-                <Info className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            {description && (
-              <TooltipContent className="bg-card border-border text-foreground text-xs p-3 max-w-[250px]">
-                <p className="font-semibold mb-1">{title}</p>
-                <p className="text-muted-foreground leading-relaxed">{description}</p>
-              </TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
         <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
-        <Badge variant="outline" className="text-[10px] text-muted-foreground">Widget</Badge>
+        <Badge variant="outline" className="text-[10px] text-muted-foreground whitespace-nowrap">Widget</Badge>
       </div>
     </div>
-    <div className="flex-1 min-h-0 relative z-10">
+    <div className="flex-1 min-h-0 relative z-10 flex flex-col">
       {children}
     </div>
   </Card>
@@ -332,8 +331,8 @@ const Dashboard = () => {
       );
       case 'chart-channels': return (
         <ChartWidget key={id} title="Channel Distribution" subtitle="Leads by communication channel" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
-          <div className="flex justify-center h-full">
-            <ResponsiveContainer width="100%" height={200}>
+          <div className="flex justify-center h-[200px]">
+            <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={channelData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value" strokeWidth={0}>
                   {channelData.map((entry: any, i: number) => (
@@ -344,11 +343,11 @@ const Dashboard = () => {
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="grid grid-cols-2 gap-2 mt-4">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-4 shrink-0">
             {channelData.map((ch: any) => (
               <div key={ch.name} className="flex items-center gap-2 text-xs">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ch.fill }} />
-                <span className="text-muted-foreground">{ch.name}</span>
+                <span className="text-muted-foreground truncate">{ch.name}</span>
                 <span className="text-foreground font-medium ml-auto">{ch.value}%</span>
               </div>
             ))}
@@ -357,7 +356,7 @@ const Dashboard = () => {
       );
       case 'perf-industry': return (
         <ChartWidget key={id} title="Industry Performance" subtitle="AI performance by vertical" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
-          <div className="space-y-4">
+          <div className="space-y-4 overflow-y-auto max-h-[200px] pr-2 custom-scrollbar">
             {agentPerformance.map((ind: any) => (
               <div key={ind.name}>
                 <div className="flex items-center justify-between mb-1.5">
@@ -378,25 +377,29 @@ const Dashboard = () => {
       );
       case 'live-agents': return (
         <ChartWidget key={id} title="Live Agent Feed" subtitle="Real-time agent status" onRemove={() => removeWidget(id)} widthClass="w-full" description={widget.description}>
-          <div className="space-y-3">
-            {liveAgents.map((agent: any) => (
-              <div key={agent.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 transition-colors">
-                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <Bot className="h-4 w-4 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-foreground">{agent.name}</span>
-                    <span className={`w-1.5 h-1.5 rounded-full ${agent.status === 'on-call' ? 'bg-primary' : 'bg-muted-foreground'}`} />
+          <div className="space-y-3 overflow-y-auto max-h-[250px] pr-2 custom-scrollbar">
+            {liveAgents.length > 0 ? (
+              liveAgents.map((agent: any) => (
+                <div key={agent.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 transition-colors">
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <Bot className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{agent.geo} · {agent.campaign}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-foreground">{agent.name}</span>
+                      <span className={`w-1.5 h-1.5 rounded-full ${agent.status === 'on-call' ? 'bg-primary' : 'bg-muted-foreground'}`} />
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{agent.geo} · {agent.campaign}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
-            <Button variant="ghost" size="sm" className="w-full mt-1 text-xs text-muted-foreground gap-1 hover:text-primary">
-              View Call Center <ChevronRight className="h-3 w-3" />
-            </Button>
+              ))
+            ) : (
+              <div className="text-center py-8 text-xs text-muted-foreground">No active agents online.</div>
+            )}
           </div>
+          <Button variant="ghost" size="sm" className="w-full mt-auto text-xs text-muted-foreground gap-1 hover:text-primary">
+            View Call Center <ChevronRight className="h-3 w-3" />
+          </Button>
         </ChartWidget>
       );
       case 'activity-stream': return (
@@ -413,7 +416,7 @@ const Dashboard = () => {
                     <p className="text-xs font-medium text-foreground">{item.action}</p>
                     <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{item.detail}</p>
                   </div>
-                  <span className="text-[10px] text-muted-foreground">{item.time}</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">{item.time}</span>
                 </div>
               );
             })}
