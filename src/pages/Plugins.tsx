@@ -23,6 +23,7 @@ import {
   RefreshCw,
   CalendarCheck,
   Workflow,
+  CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -84,71 +85,86 @@ const pluginRegistry: Plugin[] = [
   {
     id: "n8n",
     name: "n8n Automation",
-    description: "Connect complex background logic and workflows",
-    longDescription: "The brain of your AI agents. Connect n8n webhooks to handle CRM updates, database logic, and multi-step integrations during AI interactions.",
+    description: "Complex background logic and custom workflows",
+    longDescription: "The brain of your AI agents. Connect n8n webhooks to handle CRM updates, database logic, and multi-step integrations.",
     icon: Workflow,
     status: "available",
     provider: "n8n.io",
     priceMonthly: 49,
     priceYearly: 490,
-    features: ["Background logic processing", "Webhooks integration", "CRM auto-sync", "Multi-platform connectivity"],
+    features: ["Background logic processing", "Webhooks integration", "CRM auto-sync"],
     category: "Automation",
     configFields: [
       { key: "webhookUrl", label: "Production Webhook URL", placeholder: "https://n8n.yourdomain.com/webhook/...", type: "url", required: true },
-      { key: "apiKey", label: "n8n API Key (optional)", placeholder: "Your n8n API key", type: "password", required: false },
+      { key: "apiKey", label: "n8n API Key", placeholder: "Your n8n API key", type: "password", required: false },
     ],
   },
   {
-    id: "voip",
-    name: "VoIP Pro",
-    description: "SIP trunking and voice channels for AI agents",
-    longDescription: "Enterprise-grade VoIP integration with SIP trunking, call recording, IVR, and real-time transcription.",
+    id: "twilio",
+    name: "Twilio SMS & Voice",
+    description: "Enterprise SMS and SIP trunking for AI agents",
+    longDescription: "High-throughput SMS gateway and global VoIP channels for AI-driven calling campaigns.",
     icon: Phone,
     status: "available",
     provider: "Twilio",
     priceMonthly: 149,
     priceYearly: 1490,
-    features: ["Unlimited SIP channels", "Call recording & transcription", "IVR builder", "Real-time analytics"],
+    features: ["Global SMS sending", "SIP trunking", "IVR capabilities"],
     category: "Communication",
     configFields: [
-      { key: "accountSid", label: "Account SID", placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", type: "text", required: true, helpUrl: "https://console.twilio.com" },
-      { key: "authToken", label: "Auth Token", placeholder: "Your Twilio Auth Token", type: "password", required: true },
-      { key: "phoneNumber", label: "Phone Number", placeholder: "+1234567890", type: "text", required: true },
+      { key: "accountSid", label: "Account SID", placeholder: "AC...", type: "text", required: true },
+      { key: "authToken", label: "Auth Token", placeholder: "Your Twilio Token", type: "password", required: true },
+      { key: "phoneNumber", label: "Twilio Phone Number", placeholder: "+1...", type: "text", required: true },
     ],
   },
   {
-    id: "whatsapp",
-    name: "WhatsApp Business",
-    description: "WhatsApp messaging automation",
-    longDescription: "Official WhatsApp Business API with template messages, rich media, and chatbot flows.",
-    icon: MessageCircle,
+    id: "stripe",
+    name: "Stripe Payments",
+    description: "Accept payments during AI calls and chats",
+    longDescription: "Secure payment processing integration. Allow your AI agents to send payment links or process transactions safely.",
+    icon: CreditCard,
     status: "available",
-    provider: "Meta",
-    priceMonthly: 199,
-    priceYearly: 1990,
-    features: ["Template messages", "Rich media support", "Chatbot flows", "Conversation analytics"],
-    category: "Communication",
+    provider: "Stripe",
+    priceMonthly: 129,
+    priceYearly: 1290,
+    features: ["Payment link generation", "Transaction tracking", "SCA compliance"],
+    category: "Finance",
     configFields: [
-      { key: "apiToken", label: "WhatsApp API Token", placeholder: "Your Meta API Token", type: "password", required: true, helpUrl: "https://business.facebook.com" },
-      { key: "phoneNumberId", label: "Phone Number ID", placeholder: "1234567890", type: "text", required: true },
+      { key: "publishableKey", label: "Publishable Key", placeholder: "pk_test...", type: "text", required: true },
+      { key: "secretKey", label: "Secret Key", placeholder: "sk_test...", type: "password", required: true },
     ],
   },
   {
-    id: "crm-sync",
-    name: "CRM Sync",
-    description: "Two-way sync with Salesforce, HubSpot & more",
-    longDescription: "Automatically sync leads, contacts, deals, and pipeline stages between Callixis and your CRM in real-time.",
-    icon: RefreshCw,
+    id: "sendgrid",
+    name: "SendGrid Email",
+    description: "Automated email sequences and notifications",
+    longDescription: "Scalable email delivery for follow-ups, newsletters, and lead nurturing campaigns.",
+    icon: Mail,
     status: "available",
-    provider: "Salesforce / HubSpot",
+    provider: "Twilio SendGrid",
+    priceMonthly: 79,
+    priceYearly: 790,
+    features: ["Transactional email", "Marketing sequences", "Dynamic templates"],
+    category: "Communication",
+    configFields: [
+      { key: "apiKey", label: "SendGrid API Key", placeholder: "SG...", type: "password", required: true },
+      { key: "senderEmail", label: "Verified Sender Email", placeholder: "hello@yourdomain.com", type: "text", required: true },
+    ],
+  },
+  {
+    id: "fraud-shield",
+    name: "IPQualityScore",
+    description: "Real-time fraud and bot detection",
+    longDescription: "Protect your campaigns from bot traffic, proxy users, and fraudulent lead submissions.",
+    icon: Shield,
+    status: "available",
+    provider: "IPQS",
     priceMonthly: 199,
     priceYearly: 1990,
-    features: ["Real-time bi-directional sync", "Custom field mapping", "Salesforce & HubSpot native"],
-    category: "Integration",
+    features: ["Bot detection", "IP intelligence", "Email validation"],
+    category: "Security",
     configFields: [
-      { key: "crmProvider", label: "CRM Provider", placeholder: "Salesforce / HubSpot", type: "text", required: true },
-      { key: "crmApiKey", label: "CRM API Key", type: "password", required: true },
-      { key: "crmInstanceUrl", label: "CRM Instance URL", placeholder: "https://yourorg.salesforce.com", type: "url", required: true },
+      { key: "apiKey", label: "IPQS API Key", placeholder: "Your API key", type: "password", required: true },
     ],
   },
 ];
@@ -166,75 +182,37 @@ const statusStyles: Record<PluginStatus, string> = {
 
 // ── Integration Setup Sheet ────────────────────────────
 const IntegrationSheet = ({
-  plugin,
-  open,
-  onOpenChange,
-  onConfigSaved,
-  initialConfig,
+  plugin, open, onOpenChange, onConfigSaved, initialConfig,
 }: {
-  plugin: Plugin | null;
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  onConfigSaved: (pluginId: string, config: any) => void;
-  initialConfig?: any;
+  plugin: Plugin | null; open: boolean; onOpenChange: (o: boolean) => void; onConfigSaved: (pluginId: string, config: any) => void; initialConfig?: any;
 }) => {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (plugin && open) {
-      setConfigValues(initialConfig || {});
-    }
-  }, [plugin, open, initialConfig]);
-
+  useEffect(() => { if (plugin && open) setConfigValues(initialConfig || {}); }, [plugin, open, initialConfig]);
   if (!plugin) return null;
   const Icon = plugin.icon;
-
-  const handleSaveConfig = () => {
-    const missing = plugin.configFields.filter((f) => f.required && !configValues[f.key]?.trim());
-    if (missing.length) {
-      toast.error(`Please fill: ${missing.map((f) => f.label).join(", ")}`);
-      return;
-    }
-    onConfigSaved(plugin.id, configValues);
-  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="sm:max-w-md w-full bg-card border-border flex flex-col" side="right">
         <SheetHeader className="pb-6 border-b border-border shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-              <Icon className="h-5 w-5 text-primary" />
-            </div>
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center"><Icon className="h-5 w-5 text-primary" /></div>
             <div>
               <SheetTitle className="text-foreground">{plugin.name}</SheetTitle>
-              <SheetDescription className="text-xs">Configure your {plugin.provider} credentials</SheetDescription>
+              <SheetDescription className="text-xs">Configure {plugin.provider} credentials</SheetDescription>
             </div>
           </div>
         </SheetHeader>
-
         <div className="flex-1 overflow-auto py-6 space-y-6">
           {plugin.configFields.map((field) => (
             <div key={field.key} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-foreground text-xs">{field.label}{field.required && "*"}</Label>
-              </div>
-              <Input
-                type={field.type}
-                placeholder={field.placeholder}
-                value={configValues[field.key] || ""}
-                onChange={(e) => setConfigValues({...configValues, [field.key]: e.target.value})}
-                className="bg-secondary border-border text-xs h-10"
-              />
+              <Label className="text-foreground text-xs">{field.label}{field.required && "*"}</Label>
+              <Input type={field.type} placeholder={field.placeholder} value={configValues[field.key] || ""} onChange={(e) => setConfigValues({...configValues, [field.key]: e.target.value})} className="bg-secondary border-border text-xs h-10" />
             </div>
           ))}
         </div>
-
         <div className="pt-6 border-t border-border">
-          <Button onClick={handleSaveConfig} className="w-full gap-2 glow-cyan" disabled={isSaving}>
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save Configuration
-          </Button>
+          <Button onClick={() => onConfigSaved(plugin.id, configValues)} className="w-full gap-2 glow-cyan"><Check className="h-4 w-4" /> Save Configuration</Button>
         </div>
       </SheetContent>
     </Sheet>
@@ -243,35 +221,23 @@ const IntegrationSheet = ({
 
 // ── Activation Dialog ──────────────────────────────────
 const ActivateDialog = ({
-  plugin, open, onOpenChange, balance, onActivate,
+  plugin, open, onOpenChange, onActivate,
 }: {
-  plugin: Plugin | null; open: boolean; onOpenChange: (o: boolean) => void; balance: number; onActivate: (id: string, cost: number) => void;
+  plugin: Plugin | null; open: boolean; onOpenChange: (o: boolean) => void; onActivate: (id: string, cost: number) => void;
 }) => {
-  const [cycle, setCycle] = useState<BillingCycle>("monthly");
   if (!plugin) return null;
-  const price = cycle === "monthly" ? plugin.priceMonthly : plugin.priceYearly;
   const Icon = plugin.icon;
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md bg-card border-border">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Zap className="h-5 w-5 text-primary" /> Activate Plugin</DialogTitle>
-          <DialogDescription>Deducted from wallet balance.</DialogDescription>
         </DialogHeader>
         <div className="flex items-start gap-3 py-4">
           <div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center shrink-0"><Icon className="h-5 w-5 text-primary" /></div>
-          <div><p className="text-sm font-bold text-foreground">{plugin.name}</p><p className="text-xs text-muted-foreground">{plugin.longDescription}</p></div>
+          <div><p className="text-sm font-bold text-foreground">{plugin.name}</p><p className="text-xs text-muted-foreground">{plugin.description}</p></div>
         </div>
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          {(["monthly", "yearly"] as const).map(c => (
-            <button key={c} onClick={() => setCycle(c)} className={`rounded-lg border p-3 text-center transition-all ${cycle === c ? "border-primary bg-primary/10 text-primary" : "border-border bg-secondary"}`}>
-              <p className="text-sm font-bold">{formatCurrency(c === "monthly" ? plugin.priceMonthly : plugin.priceYearly)}</p>
-              <p className="text-[10px] uppercase opacity-60 font-bold">{c}</p>
-            </button>
-          ))}
-        </div>
-        <DialogFooter><Button onClick={() => onActivate(plugin.id, price)} className="w-full glow-cyan">Pay & Activate</Button></DialogFooter>
+        <DialogFooter><Button onClick={() => onActivate(plugin.id, plugin.priceMonthly)} className="w-full glow-cyan">Activate for {formatCurrency(plugin.priceMonthly)}/mo</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -285,40 +251,27 @@ const PluginCard = ({
 }) => {
   const Icon = plugin.icon;
   const isActive = plugin.status === "active";
-
   return (
     <Card className="bg-card border-border hover:border-primary/30 transition-all group">
       <CardContent className="p-5">
         <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-            <Icon className="h-6 w-6 text-primary" />
-          </div>
+          <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors"><Icon className="h-6 w-6 text-primary" /></div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-foreground truncate">{plugin.name}</h3>
               <Badge variant="outline" className={`text-[10px] uppercase font-bold ${statusStyles[plugin.status]}`}>{plugin.status}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{plugin.description}</p>
-
             <div className="mt-4 flex items-center gap-2">
               <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${isConfigured ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}>
                 {isConfigured ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />} {isConfigured ? "Linked" : "Required"}
               </div>
             </div>
-
             <div className="flex items-center justify-between mt-4">
               <p className="text-sm font-bold font-mono text-primary">{formatCurrency(plugin.priceMonthly)}<span className="text-[10px] text-muted-foreground">/mo</span></p>
               <div className="flex gap-2">
-                {isAdmin && (
-                  <Button variant="outline" size="sm" className="h-8 text-xs border-border bg-secondary/50" onClick={() => onSetup(plugin)}>
-                    <Settings className="h-3 w-3 mr-1" /> Config
-                  </Button>
-                )}
-                {isAdmin && (isActive ? (
-                  <Button variant="outline" size="sm" className="h-8 text-xs border-destructive/20 text-destructive hover:bg-destructive/10" onClick={() => onDeactivate(plugin)}>Off</Button>
-                ) : (
-                  <Button size="sm" className="h-8 text-xs glow-cyan" onClick={() => onActivate(plugin)}>Activate</Button>
-                ))}
+                {isAdmin && <Button variant="outline" size="sm" className="h-8 text-xs border-border bg-secondary/50" onClick={() => onSetup(plugin)}><Settings className="h-3 w-3 mr-1" /> Config</Button>}
+                {isAdmin && (isActive ? <Button variant="outline" size="sm" className="h-8 text-xs border-destructive/20 text-destructive hover:bg-destructive/10" onClick={() => onDeactivate(plugin)}>Off</Button> : <Button size="sm" className="h-8 text-xs glow-cyan" onClick={() => onActivate(plugin)}>Activate</Button>)}
               </div>
             </div>
           </div>
@@ -332,101 +285,51 @@ const PluginCard = ({
 const Plugins = () => {
   const { role, user } = useAuth();
   const isAdmin = role?.toLowerCase() === "admin";
-  const [loading, setLoading] = useState(true);
   const [dbPlugins, setDbPlugins] = useState<any[]>([]);
   const [activateTarget, setActivateTarget] = useState<Plugin | null>(null);
   const [setupTarget, setSetupTarget] = useState<Plugin | null>(null);
 
   const fetchPlugins = useCallback(async () => {
     if (!user) return;
-    setLoading(true);
     const { data } = await supabase.from("user_plugins").select("*").eq("user_id", user.id);
     if (data) setDbPlugins(data);
-    setLoading(false);
   }, [user]);
 
   useEffect(() => { fetchPlugins(); }, [fetchPlugins]);
 
   const handleActivate = async (id: string, cost: number) => {
     if (!user) return;
-    const { error } = await supabase.from("user_plugins").upsert({
-      user_id: user.id,
-      plugin_id: id,
-      status: "active"
-    }, { onConflict: "user_id,plugin_id" });
-
-    if (!error) {
-      toast.success("Plugin activated!");
-      setActivateTarget(null);
-      fetchPlugins();
-    }
+    const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, status: "active" }, { onConflict: "user_id,plugin_id" });
+    if (!error) { toast.success("Plugin activated!"); setActivateTarget(null); fetchPlugins(); }
   };
 
   const handleDeactivate = async (plugin: Plugin) => {
     if (!user) return;
     const { error } = await supabase.from("user_plugins").update({ status: "available" }).eq("user_id", user.id).eq("plugin_id", plugin.id);
-    if (!error) {
-      toast.success("Plugin turned off.");
-      fetchPlugins();
-    }
+    if (!error) { toast.success("Plugin deactivated."); fetchPlugins(); }
   };
 
   const handleSaveConfig = async (id: string, config: any) => {
     if (!user) return;
-    const { error } = await supabase.from("user_plugins").upsert({
-      user_id: user.id,
-      plugin_id: id,
-      config: config
-    }, { onConflict: "user_id,plugin_id" });
-
-    if (!error) {
-      toast.success("Configuration saved!");
-      setSetupTarget(null);
-      fetchPlugins();
-    }
+    const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, config: config }, { onConflict: "user_id,plugin_id" });
+    if (!error) { toast.success("Configuration saved!"); setSetupTarget(null); fetchPlugins(); }
   };
 
   const enrichedPlugins = pluginRegistry.map(p => {
     const dbP = dbPlugins.find(dp => dp.plugin_id === p.id);
-    return {
-      ...p,
-      status: (dbP?.status || "available") as PluginStatus,
-      isConfigured: !!dbP?.config && Object.keys(dbP.config).length > 0,
-      config: dbP?.config || {}
-    };
+    return { ...p, status: (dbP?.status || "available") as PluginStatus, isConfigured: !!dbP?.config && Object.keys(dbP.config).length > 0, config: dbP?.config || {} };
   });
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-display text-foreground">Plugins Marketplace</h1>
-        <p className="text-sm text-muted-foreground mt-1">Scale your AI with pro-grade integrations.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4">
+      <div><h1 className="text-2xl font-display text-foreground">Plugins Marketplace</h1><p className="text-sm text-muted-foreground mt-1">Scale your AI with pro-grade integrations.</p></div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {enrichedPlugins.map((plugin) => (
-          <PluginCard
-            key={plugin.id}
-            plugin={plugin}
-            isAdmin={isAdmin}
-            isConfigured={plugin.isConfigured}
-            onActivate={setActivateTarget}
-            onDeactivate={handleDeactivate}
-            onSetup={setSetupTarget}
-          />
+          <PluginCard key={plugin.id} plugin={plugin} isAdmin={isAdmin} isConfigured={plugin.isConfigured} onActivate={setActivateTarget} onDeactivate={handleDeactivate} onSetup={setSetupTarget} />
         ))}
       </div>
-
-      <ActivateDialog plugin={activateTarget} open={!!activateTarget}
-        onOpenChange={(o) => !o && setActivateTarget(null)} balance={WALLET_BALANCE} onActivate={handleActivate} />
-      
-      <IntegrationSheet 
-        plugin={setupTarget} 
-        open={!!setupTarget}
-        initialConfig={enrichedPlugins.find(p => p.id === setupTarget?.id)?.config}
-        onOpenChange={(o) => !o && setSetupTarget(null)} 
-        onConfigSaved={handleSaveConfig} 
-      />
+      <ActivateDialog plugin={activateTarget} open={!!activateTarget} onOpenChange={(o) => !o && setActivateTarget(null)} onActivate={handleActivate} />
+      <IntegrationSheet plugin={setupTarget} open={!!setupTarget} initialConfig={enrichedPlugins.find(p => p.id === setupTarget?.id)?.config} onOpenChange={(o) => !o && setSetupTarget(null)} onConfigSaved={handleSaveConfig} />
     </div>
   );
 };
