@@ -32,9 +32,9 @@ export type Database = {
           avatar_url?: string | null
           company_name?: string | null
           created_at?: string
-          email?: string
+          email: string
           full_name?: string | null
-          id?: string
+          id: string
           updated_at?: string
         }
         Relationships: []
@@ -52,8 +52,8 @@ export type Database = {
         }
         Update: {
           id?: string
-          role?: "admin" | "affiliate" | "brand"
-          user_id?: string
+          role: "admin" | "affiliate" | "brand"
+          user_id: string
         }
         Relationships: []
       }
@@ -66,6 +66,7 @@ export type Database = {
           industry: string | null
           model: string
           voice: string
+          n8n_webhook_url: string | null
           created_at: string
           updated_at: string
         }
@@ -77,6 +78,7 @@ export type Database = {
           industry?: string | null
           model?: string
           voice?: string
+          n8n_webhook_url?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -88,6 +90,7 @@ export type Database = {
           industry?: string | null
           model?: string
           voice?: string
+          n8n_webhook_url?: string | null
           created_at?: string
           updated_at?: string
         }
