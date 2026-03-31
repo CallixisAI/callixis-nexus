@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   Phone,
   MessageSquare,
@@ -79,11 +79,6 @@ interface Plugin {
   configFields: ConfigField[];
 }
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
 // ── plugin definitions ─────────────────────────────────
 const pluginRegistry: Plugin[] = [
   {
@@ -134,7 +129,7 @@ const pluginRegistry: Plugin[] = [
     features: ["Template messages", "Rich media support", "Chatbot flows", "Conversation analytics"],
     category: "Communication",
     configFields: [
-      { key: "apiToken", label: "WhatsApp API Token", placeholder: "Your Meta API Token", type: "password", required: true },
+      { key: "apiToken", label: "WhatsApp API Token", placeholder: "Your Meta API Token", type: "password", required: true, helpUrl: "https://business.facebook.com" },
       { key: "phoneNumberId", label: "Phone Number ID", placeholder: "1234567890", type: "text", required: true },
     ],
   },
@@ -184,7 +179,7 @@ const IntegrationSheet = ({
   initialConfig?: any;
 }) => {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
-  const [isSaving, setIsStreaming] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (plugin && open) {
