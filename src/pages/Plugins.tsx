@@ -80,6 +80,11 @@ interface Plugin {
   configFields: ConfigField[];
 }
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 // ── plugin definitions ─────────────────────────────────
 const pluginRegistry: Plugin[] = [
   {
@@ -151,22 +156,6 @@ const pluginRegistry: Plugin[] = [
       { key: "senderEmail", label: "Verified Sender Email", placeholder: "hello@yourdomain.com", type: "text", required: true },
     ],
   },
-  {
-    id: "fraud-shield",
-    name: "IPQualityScore",
-    description: "Real-time fraud and bot detection",
-    longDescription: "Protect your campaigns from bot traffic, proxy users, and fraudulent lead submissions.",
-    icon: Shield,
-    status: "available",
-    provider: "IPQS",
-    priceMonthly: 199,
-    priceYearly: 1990,
-    features: ["Bot detection", "IP intelligence", "Email validation"],
-    category: "Security",
-    configFields: [
-      { key: "apiKey", label: "IPQS API Key", placeholder: "Your API key", type: "password", required: true },
-    ],
-  },
 ];
 
 const WALLET_BALANCE = 8350;
@@ -180,6 +169,37 @@ const statusStyles: Record<PluginStatus, string> = {
   inactive: "bg-destructive/10 text-destructive border-destructive/20",
 };
 
+// ── AI Chat stream helper ──────────────────────────────
+async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any) {
+  try {
+    const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/plugin-setup-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+      body: JSON.stringify({ messages, pluginId }),
+    });
+    if (!resp.ok) throw new Error("Failed to connect");
+    const reader = resp.body?.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader!.read();
+      if (done) break;
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("
+").filter(l => l.startsWith("data: "));
+      for (const line of lines) {
+        const data = line.replace("data: ", "");
+        if (data === "[DONE]") break;
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) onDelta(content);
+        } catch {}
+      }
+    }
+    onDone();
+  } catch { onError("Error connecting to assistant."); }
+}
+
 // ── Integration Setup Sheet ────────────────────────────
 const IntegrationSheet = ({
   plugin, open, onOpenChange, onConfigSaved, initialConfig,
@@ -187,48 +207,81 @@ const IntegrationSheet = ({
   plugin: Plugin | null; open: boolean; onOpenChange: (o: boolean) => void; onConfigSaved: (pluginId: string, config: any) => void; initialConfig?: any;
 }) => {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
-  const [isSaving, setIsSaving] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { if (plugin && open) setConfigValues(initialConfig || {}); }, [plugin, open, initialConfig]);
-  
+  useEffect(() => {
+    if (plugin && open) {
+      setConfigValues(initialConfig || {});
+      setMessages([{ role: "assistant", content: `👋 Hi! I'm your **${plugin.name}** assistant. Do you have your credentials ready?` }]);
+    }
+  }, [plugin, open]);
+
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+
   if (!plugin) return null;
   const Icon = plugin.icon;
 
-  const handleSave = async () => {
-    const missing = plugin.configFields.filter((f) => f.required && !configValues[f.key]?.trim());
-    if (missing.length) {
-      toast.error(`Required: ${missing.map((f) => f.label).join(", ")}`);
-      return;
-    }
-    setIsSaving(true);
-    await onConfigSaved(plugin.id, configValues);
-    setIsSaving(false);
+  const handleChatSend = async () => {
+    if (!chatInput.trim() || isStreaming) return;
+    const userMsg: ChatMessage = { role: "user", content: chatInput };
+    const newMsgs = [...messages, userMsg];
+    setMessages(newMsgs);
+    setChatInput("");
+    setIsStreaming(true);
+    let assistantSoFar = "";
+    await streamChat({
+      messages: newMsgs,
+      pluginId: plugin.id,
+      onDelta: (chunk: string) => {
+        assistantSoFar += chunk;
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && prev.length > newMsgs.length) {
+            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantSoFar } : m);
+          }
+          return [...prev, { role: "assistant", content: assistantSoFar }];
+        });
+      },
+      onDone: () => setIsStreaming(false),
+      onError: (msg: string) => { toast.error(msg); setIsStreaming(false); }
+    });
   };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="sm:max-w-md w-full bg-card border-border flex flex-col" side="right">
-        <SheetHeader className="pb-6 border-b border-border shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center"><Icon className="h-5 w-5 text-primary" /></div>
-            <div>
-              <SheetTitle className="text-foreground">{plugin.name}</SheetTitle>
-              <SheetDescription className="text-xs">Configure {plugin.provider} credentials</SheetDescription>
+      <SheetContent className="sm:max-w-4xl w-full bg-card border-border flex flex-col p-0" side="right">
+        <SheetHeader className="p-6 border-b border-border shrink-0 flex flex-row items-center gap-4">
+          <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center"><Icon className="h-5 w-5 text-primary" /></div>
+          <div><SheetTitle>{plugin.name}</SheetTitle><SheetDescription>Configure and get AI help</SheetDescription></div>
+        </SheetHeader>
+        <div className="flex-1 flex overflow-hidden">
+          <div className="w-1/2 border-r border-border p-6 overflow-auto space-y-6">
+            <h3 className="text-sm font-bold flex items-center gap-2"><Settings className="h-4 w-4" /> Configuration</h3>
+            {plugin.configFields.map(f => (
+              <div key={f.key} className="space-y-2">
+                <Label className="text-xs">{f.label}{f.required && "*"}</Label>
+                <Input type={f.type} value={configValues[f.key] || ""} onChange={e => setConfigValues({...configValues, [f.key]: e.target.value})} className="bg-secondary" />
+              </div>
+            ))}
+            <Button onClick={() => onConfigSaved(plugin.id, configValues)} className="w-full glow-cyan">Save Settings</Button>
+          </div>
+          <div className="w-1/2 flex flex-col bg-secondary/20">
+            <div className="p-3 border-b border-border text-[10px] font-bold uppercase tracking-widest flex items-center gap-2"><Sparkles className="h-3 w-3 text-primary" /> AI Assistant</div>
+            <ScrollArea className="flex-1 p-4"><div ref={scrollRef} className="space-y-4">
+              {messages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[90%] p-2 rounded text-xs ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-card border border-border'}`}>{m.content}</div>
+                </div>
+              ))}
+            </div></ScrollArea>
+            <div className="p-4 border-t border-border flex gap-2">
+              <Input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Ask for help..." onKeyDown={e => e.key === 'Enter' && handleChatSend()} className="h-9 text-xs" />
+              <Button onClick={handleChatSend} size="icon" className="h-9 w-9 shrink-0"><Send className="h-4 w-4" /></Button>
             </div>
           </div>
-        </SheetHeader>
-        <div className="flex-1 overflow-auto py-6 space-y-6">
-          {plugin.configFields.map((field) => (
-            <div key={field.key} className="space-y-2">
-              <Label className="text-foreground text-xs">{field.label}{field.required && "*"}</Label>
-              <Input type={field.type} placeholder={field.placeholder} value={configValues[field.key] || ""} onChange={(e) => setConfigValues({...configValues, [field.key]: e.target.value})} className="bg-secondary border-border text-xs h-10" />
-            </div>
-          ))}
-        </div>
-        <div className="pt-6 border-t border-border">
-          <Button onClick={handleSave} className="w-full gap-2 glow-cyan" disabled={isSaving}>
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save Configuration
-          </Button>
         </div>
       </SheetContent>
     </Sheet>
@@ -246,9 +299,7 @@ const ActivateDialog = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md bg-card border-border">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Zap className="h-5 w-5 text-primary" /> Activate Plugin</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Zap className="h-5 w-5 text-primary" /> Activate Plugin</DialogTitle></DialogHeader>
         <div className="flex items-start gap-3 py-4">
           <div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center shrink-0"><Icon className="h-5 w-5 text-primary" /></div>
           <div><p className="text-sm font-bold text-foreground">{plugin.name}</p><p className="text-xs text-muted-foreground">{plugin.description}</p></div>
@@ -310,9 +361,7 @@ const Plugins = () => {
     try {
       const { data, error } = await supabase.from("user_plugins").select("*").eq("user_id", user.id);
       if (!error && data) setDbPlugins(data);
-    } catch (err) {
-      console.error("Fetch plugins error:", err);
-    }
+    } catch (err) { console.error(err); }
   }, [user]);
 
   useEffect(() => { fetchPlugins(); }, [fetchPlugins]);
@@ -322,12 +371,8 @@ const Plugins = () => {
     try {
       const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, status: "active" }, { onConflict: "user_id,plugin_id" });
       if (error) throw error;
-      toast.success("Plugin activated!");
-      setActivateTarget(null);
-      fetchPlugins();
-    } catch (err: any) {
-      toast.error(`Activation failed: ${err.message}`);
-    }
+      toast.success("Plugin activated!"); setActivateTarget(null); fetchPlugins();
+    } catch (err: any) { toast.error(err.message); }
   };
 
   const handleDeactivate = async (plugin: Plugin) => {
@@ -335,31 +380,17 @@ const Plugins = () => {
     try {
       const { error } = await supabase.from("user_plugins").update({ status: "available" }).eq("user_id", user.id).eq("plugin_id", plugin.id);
       if (error) throw error;
-      toast.success("Plugin deactivated.");
-      fetchPlugins();
-    } catch (err: any) {
-      toast.error(`Deactivation failed: ${err.message}`);
-    }
+      toast.success("Plugin deactivated."); fetchPlugins();
+    } catch (err: any) { toast.error(err.message); }
   };
 
   const handleSaveConfig = async (id: string, config: any) => {
     if (!user) return;
     try {
-      const { error } = await supabase.from("user_plugins").upsert({
-        user_id: user.id,
-        plugin_id: id,
-        config: config
-      }, { onConflict: "user_id,plugin_id" });
-
+      const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, config: config }, { onConflict: "user_id,plugin_id" });
       if (error) throw error;
-      
-      toast.success("Configuration saved!");
-      setSetupTarget(null);
-      fetchPlugins();
-    } catch (err: any) {
-      console.error("Save config error:", err);
-      toast.error(`Save failed: ${err.message}`);
-    }
+      toast.success("Configuration saved!"); setSetupTarget(null); fetchPlugins();
+    } catch (err: any) { toast.error(err.message); }
   };
 
   const enrichedPlugins = pluginRegistry.map(p => {
