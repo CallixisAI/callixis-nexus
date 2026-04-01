@@ -187,9 +187,23 @@ const IntegrationSheet = ({
   plugin: Plugin | null; open: boolean; onOpenChange: (o: boolean) => void; onConfigSaved: (pluginId: string, config: any) => void; initialConfig?: any;
 }) => {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
   useEffect(() => { if (plugin && open) setConfigValues(initialConfig || {}); }, [plugin, open, initialConfig]);
+  
   if (!plugin) return null;
   const Icon = plugin.icon;
+
+  const handleSave = async () => {
+    const missing = plugin.configFields.filter((f) => f.required && !configValues[f.key]?.trim());
+    if (missing.length) {
+      toast.error(`Required: ${missing.map((f) => f.label).join(", ")}`);
+      return;
+    }
+    setIsSaving(true);
+    await onConfigSaved(plugin.id, configValues);
+    setIsSaving(false);
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -212,7 +226,9 @@ const IntegrationSheet = ({
           ))}
         </div>
         <div className="pt-6 border-t border-border">
-          <Button onClick={() => onConfigSaved(plugin.id, configValues)} className="w-full gap-2 glow-cyan"><Check className="h-4 w-4" /> Save Configuration</Button>
+          <Button onClick={handleSave} className="w-full gap-2 glow-cyan" disabled={isSaving}>
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save Configuration
+          </Button>
         </div>
       </SheetContent>
     </Sheet>
@@ -291,28 +307,59 @@ const Plugins = () => {
 
   const fetchPlugins = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase.from("user_plugins").select("*").eq("user_id", user.id);
-    if (data) setDbPlugins(data);
+    try {
+      const { data, error } = await supabase.from("user_plugins").select("*").eq("user_id", user.id);
+      if (!error && data) setDbPlugins(data);
+    } catch (err) {
+      console.error("Fetch plugins error:", err);
+    }
   }, [user]);
 
   useEffect(() => { fetchPlugins(); }, [fetchPlugins]);
 
   const handleActivate = async (id: string, cost: number) => {
     if (!user) return;
-    const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, status: "active" }, { onConflict: "user_id,plugin_id" });
-    if (!error) { toast.success("Plugin activated!"); setActivateTarget(null); fetchPlugins(); }
+    try {
+      const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, status: "active" }, { onConflict: "user_id,plugin_id" });
+      if (error) throw error;
+      toast.success("Plugin activated!");
+      setActivateTarget(null);
+      fetchPlugins();
+    } catch (err: any) {
+      toast.error(`Activation failed: ${err.message}`);
+    }
   };
 
   const handleDeactivate = async (plugin: Plugin) => {
     if (!user) return;
-    const { error } = await supabase.from("user_plugins").update({ status: "available" }).eq("user_id", user.id).eq("plugin_id", plugin.id);
-    if (!error) { toast.success("Plugin deactivated."); fetchPlugins(); }
+    try {
+      const { error } = await supabase.from("user_plugins").update({ status: "available" }).eq("user_id", user.id).eq("plugin_id", plugin.id);
+      if (error) throw error;
+      toast.success("Plugin deactivated.");
+      fetchPlugins();
+    } catch (err: any) {
+      toast.error(`Deactivation failed: ${err.message}`);
+    }
   };
 
   const handleSaveConfig = async (id: string, config: any) => {
     if (!user) return;
-    const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, config: config }, { onConflict: "user_id,plugin_id" });
-    if (!error) { toast.success("Configuration saved!"); setSetupTarget(null); fetchPlugins(); }
+    try {
+      const { error } = await supabase.from("user_plugins").upsert({
+        user_id: user.id,
+        plugin_id: id,
+        config: config
+      }, { onConflict: "user_id,plugin_id" });
+
+      if (error) throw error;
+      
+      toast.success("Configuration saved!");
+      setSetupTarget(null);
+      fetchPlugins();
+    } catch (err: any) {
+      console.error("Save config error:", err);
+      toast.error(`Save failed: ${err.message}`);
+    }
   };
 
   const enrichedPlugins = pluginRegistry.map(p => {
