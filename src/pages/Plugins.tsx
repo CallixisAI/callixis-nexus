@@ -217,7 +217,7 @@ const IntegrationSheet = ({
       setConfigValues(initialConfig || {});
       setMessages([{ role: "assistant", content: `👋 Hi! I'm your **${plugin.name}** assistant. Do you have your credentials ready?` }]);
     }
-  }, [plugin, open]);
+  }, [plugin, open, initialConfig]);
 
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
 
