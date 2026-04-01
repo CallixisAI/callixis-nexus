@@ -186,10 +186,13 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value);
-      // FIXED: Use regex literal to split lines, avoiding unterminated string issues
-      const lines = chunk.split(/?
-/).filter(l => l.trim().startsWith("data: "));
-      for (const line of lines) {
+      
+      // EXTREMELY SAFE LINE SPLITTING
+      const lines = chunk.split("
+");
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line.startsWith("data: ")) continue;
         const data = line.replace("data: ", "").trim();
         if (data === "[DONE]") break;
         try {
