@@ -187,11 +187,12 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
       if (done) break;
       const chunk = decoder.decode(value);
       
-      // FIXED: Use a safe non-newline character for temporary split then clean up
-      const lines = chunk.split("data: ");
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const data = line.trim();
+      const lines = chunk.split("
+");
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line.startsWith("data: ")) continue;
+        const data = line.replace("data: ", "").trim();
         if (data === "[DONE]") break;
         try {
           const parsed = JSON.parse(data);
