@@ -62,39 +62,28 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     setIsLoading(true);
 
     try {
-      const { data: plugin } = await supabase
-        .from("user_plugins")
-        .select("config")
-        .eq("user_id", user?.id)
-        .eq("plugin_id", "n8n")
-        .single();
-
-      const webhookUrl = plugin?.config?.webhookUrl;
-
-      if (!webhookUrl) {
-        setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Error: No n8n Webhook URL found in Plugins." }]);
-      } else {
-        const response = await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: currentInput,
-            agent_id: agent.id,
-            agent_name: agent.name,
-            timestamp: new Date().toISOString()
-          })
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          const reply = result.output || result.message || "n8n received the message.";
-          setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-        } else {
-          throw new Error();
+      // PROXY VIA EDGE FUNCTION TO AVOID CORS
+      const { data, error } = await supabase.functions.invoke('n8n-proxy', {
+        body: { 
+          message: currentInput,
+          agent_id: agent.id,
+          agent_name: agent.name,
+          user_id: user?.id
         }
-      }
-    } catch (err) {
-      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection Failed. Check n8n settings." }]);
+      });
+
+      if (error) throw error;
+
+      const reply = data.output || data.message || "n8n received the message.";
+      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+      
+    } catch (err: any) {
+      console.error("Chat Error:", err);
+      // Fallback if Edge function is not yet deployed
+      setMessages(prev => [...prev, { 
+        role: "assistant", 
+        content: "⚠️ Connection Failed. Ensure your n8n flow is active and the proxy is configured. Note: Direct browser-to-n8n calls are often blocked by CORS." 
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -106,14 +95,14 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-md bg-card border-border flex flex-col h-[500px] overflow-hidden">
         <DialogHeader className="border-b border-border pb-4 shrink-0">
-          <DialogTitle className="flex items-center gap-2"><Bot className="h-5 w-5 text-primary" /> Test: {agent.name}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Test: {agent.name}</DialogTitle>
         </DialogHeader>
         
         <ScrollArea className="flex-1 p-4 min-h-0">
           <div ref={scrollRef} className="space-y-4">
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-lg text-sm ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground border border-border'}`}>
+                <div className={`max-w-[80%] p-3 rounded-lg text-sm ${m.role === 'user' ? 'bg-primary text-primary-foreground shadow-[0_0_15px_rgba(0,229,160,0.2)]' : 'bg-secondary text-foreground border border-border'}`}>
                   {m.content}
                 </div>
               </div>
@@ -161,43 +150,43 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="bg-card border-border max-w-2xl">
         <DialogHeader><DialogTitle className="text-foreground flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Create AI Agent</DialogTitle></DialogHeader>
-        <div className="flex items-center gap-1 mb-4">{WIZARD_STEPS.map((s, i) => (<div key={s} className={`h-1.5 rounded-full flex-1 transition-colors ${i <= step ? "bg-primary" : "bg-border"}`} />))}</div>
+        <div className="flex items-center gap-1 mb-4">{WIZARD_STEPS.map((s, i) => (<div key={s} className={`h-1.5 rounded-full flex-1 transition-colors ${i <= step ? "bg-primary shadow-[0_0_8px_rgba(0,255,255,0.3)]" : "bg-border"}`} />))}</div>
         
         {step === 0 && (
           <div className="space-y-4">
-            <div className="space-y-2"><Label>Agent Name</Label><Input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50" /></div>
-            <div className="space-y-2"><Label>Industry</Label><Select value={industry} onValueChange={setIndustry}><SelectTrigger className="bg-secondary/50"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent></Select></div>
+            <div className="space-y-2"><Label>Agent Name</Label><Input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50 border-border" /></div>
+            <div className="space-y-2"><Label>Industry</Label><Select value={industry} onValueChange={setIndustry}><SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent></Select></div>
           </div>
         )}
 
         {step === 1 && (
           <div className="space-y-4">
             <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> Call Script</Label>
-            <Textarea value={script} onChange={e => setScript(e.target.value)} rows={8} className="bg-secondary/50" />
+            <Textarea value={script} onChange={e => setScript(e.target.value)} rows={8} className="bg-secondary/50 border-border" />
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Select Logic Provider (The Brain)</Label>
+              <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Select Logic Provider</Label>
               <Select value={logicProvider} onValueChange={setLogicProvider}>
-                <SelectTrigger className="bg-secondary/50"><SelectValue placeholder="Default Callixis AI" /></SelectTrigger>
+                <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Default AI" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">Default Callixis AI</SelectItem>
                   {activePlugins.map(p => (
-                    <SelectItem key={p.plugin_id} value={p.plugin_id} className="text-primary font-medium">
-                      {p.plugin_id === 'n8n' ? "n8n Automation (Active)" : p.plugin_id}
+                    <SelectItem key={p.plugin_id} value={p.plugin_id} className="text-primary font-medium font-mono uppercase tracking-tight">
+                      {p.plugin_id === 'n8n' ? "n8n Automation (Connected)" : p.plugin_id}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Voice</Label>
+              <Label>Voice Preference</Label>
               <div className="grid grid-cols-2 gap-2">
                 {VOICES.map(v => (
-                  <button key={v.id} onClick={() => setVoice(v.id)} className={`p-3 rounded-lg border text-sm text-left ${voice === v.id ? "border-primary bg-primary/10" : "border-border bg-secondary/50"}`}>{v.name}</button>
+                  <button key={v.id} onClick={() => setVoice(v.id)} className={`p-3 rounded-lg border text-sm text-left transition-all ${voice === v.id ? "border-primary bg-primary/10" : "border-border bg-secondary/50"}`}>{v.name}</button>
                 ))}
               </div>
             </div>
@@ -206,14 +195,14 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
 
         {step === 3 && (
           <div className="space-y-4 bg-secondary/30 p-4 rounded-lg border border-border">
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent:</span><span>{agentName}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Logic:</span><span className="text-primary font-bold uppercase">{logicProvider}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent:</span><span className="font-bold">{agentName}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Logic Provider:</span><span className="text-primary font-bold uppercase">{logicProvider}</span></div>
           </div>
         )}
 
         <div className="flex justify-between mt-8 pt-4 border-t border-border">
           <Button variant="outline" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step > 0 ? "Back" : "Cancel"}</Button>
-          {step < maxStep ? <Button onClick={() => setStep(step + 1)} disabled={!canNext()}>Next</Button> : <Button onClick={onClose} className="glow-cyan">Deploy Agent</Button>}
+          {step < maxStep ? <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">Next Step</Button> : <Button onClick={onClose} className="glow-cyan">Deploy Agent</Button>}
         </div>
       </DialogContent>
     </Dialog>
@@ -238,22 +227,22 @@ const AIAgents = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-display text-foreground">AI Agents</h1><p className="text-sm text-muted-foreground mt-1 text-glow-none">Deploy and manage your agents.</p></div>
-        <Button className="glow-cyan h-10 px-5" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
+        <div><h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1><p className="text-sm text-muted-foreground mt-1">Connect your plugins to your agents.</p></div>
+        <Button className="glow-cyan h-10 px-5 font-bold" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {initialAgents.map((agent) => (
-          <Card key={agent.id} className="bg-card border-border p-5 group hover:border-primary/30 transition-all">
+          <Card key={agent.id} className="bg-card border-border p-5 group hover:border-primary/30 transition-all shadow-sm">
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center"><Bot className="h-5 w-5 text-primary" /></div>
+                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors"><Bot className="h-5 w-5 text-primary" /></div>
                 <div><h3 className="text-sm font-bold text-foreground">{agent.name}</h3><p className="text-xs text-muted-foreground">{agent.industry}</p></div>
               </div>
-              <Badge variant="outline" className={statusStyles[agent.status]}>{agent.status}</Badge>
+              <Badge variant="outline" className={`${statusStyles[agent.status]} border-none font-bold uppercase text-[9px]`}>{agent.status}</Badge>
             </div>
             <div className="mt-6 pt-4 border-t border-border/50 flex justify-between items-center">
-              <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8"><Play className="h-4 w-4" /></Button>
+              <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"><Play className="h-4 w-4" /></Button>
             </div>
           </Card>
         ))}
