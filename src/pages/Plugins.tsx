@@ -180,14 +180,16 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
     if (!resp.ok) throw new Error("Failed to connect");
     const reader = resp.body?.getReader();
     const decoder = new TextDecoder();
+    if (!reader) throw new Error("No reader");
+    
     while (true) {
-      const { done, value } = await reader!.read();
+      const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value);
       const lines = chunk.split("
-").filter(l => l.startsWith("data: "));
+").filter(l => l.trim().startsWith("data: "));
       for (const line of lines) {
-        const data = line.replace("data: ", "");
+        const data = line.replace("data: ", "").trim();
         if (data === "[DONE]") break;
         try {
           const parsed = JSON.parse(data);
