@@ -187,7 +187,6 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
       if (done) break;
       const chunk = decoder.decode(value);
       
-      // EXTREMELY SAFE LINE SPLITTING
       const lines = chunk.split("
 ");
       for (const rawLine of lines) {
