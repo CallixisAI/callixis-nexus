@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Plus, Play, Pause, Wand2, ChevronRight, ChevronLeft, FileText, Zap, Volume2, Square, MessageSquare, Loader2, BrainCircuit } from "lucide-react";
+import { Bot, Plus, Play, Pause, Wand2, ChevronRight, ChevronLeft, FileText, Zap, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,7 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "@/hooks/use-toast";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -32,6 +33,101 @@ const VOICES = [
 
 const INDUSTRIES = ["Real Estate", "Insurance", "Medical", "Finance", "Car Sales", "Home Improvement", "Other"];
 
+// ── Test Chat Component ────────────────────────────────
+const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; onClose: () => void }) => {
+  const { user } = useAuth();
+  const [messages, setMessages] = useState<any[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) setMessages([{ role: "assistant", content: `Hello! I am ${agent.name}. How can I help you?` }]);
+  }, [open, agent]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
+
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
+    const userMsg = { role: "user", content: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      // 1. Fetch n8n config from Supabase
+      const { data: plugin } = await supabase
+        .from("user_plugins")
+        .select("config")
+        .eq("user_id", user?.id)
+        .eq("plugin_id", "n8n")
+        .single();
+
+      const webhookUrl = plugin?.config?.webhookUrl;
+
+      if (!webhookUrl) {
+        setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Error: No n8n Webhook URL found in Plugins." }]);
+      } else {
+        // 2. Send to n8n
+        const response = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: input,
+            agent_id: agent.id,
+            agent_name: agent.name,
+            timestamp: new Date().toISOString()
+          })
+        });
+
+        // 3. Handle response (n8n should return { "output": "..." } or similar)
+        if (response.ok) {
+          const result = await response.json();
+          const reply = result.output || result.message || "n8n received the message (No response body provided).";
+          setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+        } else {
+          throw new Error();
+        }
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection Failed. Check your n8n flow and CORS settings." }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md bg-card border-border flex flex-col h-[500px]">
+        <DialogHeader className="border-b border-border pb-4 shrink-0">
+          <DialogTitle className="flex items-center gap-2"><Bot className="h-5 w-5 text-primary" /> Test: {agent.name}</DialogTitle>
+        </DialogHeader>
+        
+        <ScrollArea className="flex-1 p-4">
+          <div ref={scrollRef} className="space-y-4">
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] p-3 rounded-lg text-sm ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground border border-border'}`}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+        </ScrollArea>
+
+        <div className="p-4 border-t border-border shrink-0 flex gap-2">
+          <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Type a message..." onKeyDown={e => e.key === 'Enter' && handleSend()} className="bg-secondary border-border" />
+          <Button onClick={handleSend} disabled={isLoading} className="glow-cyan"><Send className="h-4 w-4" /></Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// ── Main Wizard Component ──────────────────────────────
 const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose: () => void; activePlugins: any[] }) => {
   const [step, setStep] = useState(0);
   const [agentName, setAgentName] = useState("");
@@ -76,7 +172,7 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
             <div className="space-y-2">
               <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Select Logic Provider (The Brain)</Label>
               <Select value={logicProvider} onValueChange={setLogicProvider}>
-                <SelectTrigger className="bg-secondary/50"><SelectValue placeholder="Default AI" /></SelectTrigger>
+                <SelectTrigger className="bg-secondary/50"><SelectValue placeholder="Default Callixis AI" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">Default Callixis AI</SelectItem>
                   {activePlugins.map(p => (
@@ -86,7 +182,6 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-[10px] text-muted-foreground mt-1">Active plugins from your Marketplace appear here.</p>
             </div>
             <div className="space-y-2">
               <Label>Voice</Label>
@@ -119,6 +214,7 @@ const AIAgents = () => {
   const { user } = useAuth();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [activePlugins, setActivePlugins] = useState<any[]>([]);
+  const [testAgent, setTestAgent] = useState<any | null>(null);
 
   useEffect(() => {
     const loadPlugins = async () => {
@@ -132,8 +228,8 @@ const AIAgents = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-display text-foreground">AI Agents</h1><p className="text-sm text-muted-foreground mt-1">Connect your plugins to your agents.</p></div>
-        <Button className="glow-cyan" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
+        <div><h1 className="text-2xl font-display text-foreground">AI Agents</h1><p className="text-sm text-muted-foreground mt-1 text-glow-none">Deploy and manage your agents.</p></div>
+        <Button className="glow-cyan h-10 px-5" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {initialAgents.map((agent) => (
@@ -146,13 +242,14 @@ const AIAgents = () => {
               <Badge variant="outline" className={statusStyles[agent.status]}>{agent.status}</Badge>
             </div>
             <div className="mt-6 pt-4 border-t border-border/50 flex justify-between items-center">
-              <Button variant="outline" size="sm" className="h-8 text-[10px] gap-1"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
+              <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
               <Button variant="ghost" size="icon" className="h-8 w-8"><Play className="h-4 w-4" /></Button>
             </div>
           </Card>
         ))}
       </div>
       <AgentWizard open={wizardOpen} onClose={() => setWizardOpen(false)} activePlugins={activePlugins} />
+      <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />
     </div>
   );
 };
