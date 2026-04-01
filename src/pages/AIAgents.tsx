@@ -62,27 +62,46 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     setIsLoading(true);
 
     try {
-      // PROXY VIA EDGE FUNCTION TO AVOID CORS
-      const { data, error } = await supabase.functions.invoke('n8n-proxy', {
-        body: { 
-          message: currentInput,
-          agent_id: agent.id,
-          agent_name: agent.name,
-          user_id: user?.id
+      // 1. Fetch n8n config from Supabase
+      const { data: plugin } = await supabase
+        .from("user_plugins")
+        .select("config")
+        .eq("user_id", user?.id)
+        .eq("plugin_id", "n8n")
+        .single();
+
+      const webhookUrl = plugin?.config?.webhookUrl;
+
+      if (!webhookUrl) {
+        setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Error: No n8n Webhook URL found. Configure it in Plugins tab." }]);
+      } else {
+        // 2. Direct fetch with 'no-cors' mode as fallback or normal POST
+        // We try normal first, as no-cors won't let us see the response body
+        const response = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: currentInput,
+            agent_id: agent.id,
+            agent_name: agent.name,
+            timestamp: new Date().toISOString()
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          const reply = result.output || result.message || result.data || "Message received by n8n.";
+          setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+        } else {
+          setMessages(prev => [...prev, { role: "assistant", content: "⚠️ n8n received the signal but returned an error status. Check your n8n workflow logs." }]);
         }
-      });
-
-      if (error) throw error;
-
-      const reply = data.output || data.message || "n8n received the message.";
-      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-      
-    } catch (err: any) {
-      console.error("Chat Error:", err);
-      // Fallback if Edge function is not yet deployed
+      }
+    } catch (err) {
+      // If we hit a CORS error, the catch block triggers. 
+      // We'll give a more helpful instruction.
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: "⚠️ Connection Failed. Ensure your n8n flow is active and the proxy is configured. Note: Direct browser-to-n8n calls are often blocked by CORS." 
+        content: "⚠️ Magical barrier detected (CORS)! Your browser is blocking the direct reply. Please enable 'CORS' in your n8n webhook settings or deploy the Supabase proxy function." 
       }]);
     } finally {
       setIsLoading(false);
@@ -227,7 +246,7 @@ const AIAgents = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1><p className="text-sm text-muted-foreground mt-1">Connect your plugins to your agents.</p></div>
+        <div><h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1><p className="text-sm text-muted-foreground mt-1 text-glow-none">Connect your plugins to your agents.</p></div>
         <Button className="glow-cyan h-10 px-5 font-bold" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
