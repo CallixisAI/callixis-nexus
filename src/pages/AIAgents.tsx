@@ -42,7 +42,11 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (open) setMessages([{ role: "assistant", content: `Hello! I am ${agent.name}. How can I help you?` }]);
+    if (open && agent) {
+      setMessages([{ role: "assistant", content: `Hello! I am ${agent.name}. How can I help you?` }]);
+    } else {
+      setMessages([]);
+    }
   }, [open, agent]);
 
   useEffect(() => {
@@ -50,14 +54,14 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   }, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !agent) return;
     const userMsg = { role: "user", content: input };
     setMessages(prev => [...prev, userMsg]);
+    const currentInput = input;
     setInput("");
     setIsLoading(true);
 
     try {
-      // 1. Fetch n8n config from Supabase
       const { data: plugin } = await supabase
         .from("user_plugins")
         .select("config")
@@ -70,42 +74,42 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
       if (!webhookUrl) {
         setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Error: No n8n Webhook URL found in Plugins." }]);
       } else {
-        // 2. Send to n8n
         const response = await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: input,
+            message: currentInput,
             agent_id: agent.id,
             agent_name: agent.name,
             timestamp: new Date().toISOString()
           })
         });
 
-        // 3. Handle response (n8n should return { "output": "..." } or similar)
         if (response.ok) {
           const result = await response.json();
-          const reply = result.output || result.message || "n8n received the message (No response body provided).";
+          const reply = result.output || result.message || "n8n received the message.";
           setMessages(prev => [...prev, { role: "assistant", content: reply }]);
         } else {
           throw new Error();
         }
       }
     } catch (err) {
-      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection Failed. Check your n8n flow and CORS settings." }]);
+      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection Failed. Check n8n settings." }]);
     } finally {
       setIsLoading(false);
     }
   };
 
+  if (!agent) return null;
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md bg-card border-border flex flex-col h-[500px]">
+      <DialogContent className="sm:max-w-md bg-card border-border flex flex-col h-[500px] overflow-hidden">
         <DialogHeader className="border-b border-border pb-4 shrink-0">
           <DialogTitle className="flex items-center gap-2"><Bot className="h-5 w-5 text-primary" /> Test: {agent.name}</DialogTitle>
         </DialogHeader>
         
-        <ScrollArea className="flex-1 p-4">
+        <ScrollArea className="flex-1 p-4 min-h-0">
           <div ref={scrollRef} className="space-y-4">
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -114,7 +118,13 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
                 </div>
               </div>
             ))}
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-secondary rounded-lg px-3 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                </div>
+              </div>
+            )}
           </div>
         </ScrollArea>
 
@@ -249,7 +259,7 @@ const AIAgents = () => {
         ))}
       </div>
       <AgentWizard open={wizardOpen} onClose={() => setWizardOpen(false)} activePlugins={activePlugins} />
-      <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />
+      {testAgent && <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />}
     </div>
   );
 };
