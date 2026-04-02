@@ -24,11 +24,22 @@ const statusStyles: Record<string, string> = {
   Running: "text-primary bg-primary/10",
   Paused: "text-yellow-400 bg-yellow-400/10",
   Training: "text-blue-400 bg-blue-400/10",
+  Idle: "text-muted-foreground bg-secondary/50",
 };
 
-const VOICES = [
-  { id: "sarah", name: "Sarah", accent: "US Female", desc: "Warm, professional", elevenLabsId: "EXAVITQu4vr4xnSDxMaL" },
-  { id: "james", name: "James", accent: "US Male", desc: "Confident, authoritative", elevenLabsId: "JBFqnCBsd6RMkjVDRZzb" },
+// ── Voice Registry ─────────────────────────────────────
+const VOICE_REGISTRY = [
+  // --- ElevenLabs (High Quality) ---
+  { id: "eleven-sarah", name: "Sarah", provider: "elevenlabs", voiceId: "EXAVITQu4vr4xnSDxMaL", language: "en", flag: "🇺🇸", desc: "Warm, professional" },
+  { id: "eleven-james", name: "James", provider: "elevenlabs", voiceId: "JBFqnCBsd6RMkjVDRZzb", language: "en", flag: "🇺🇸", desc: "Confident, authoritative" },
+  { id: "eleven-bella", name: "Bella", provider: "elevenlabs", voiceId: "EXAVITQu4vr4xnSDxMaL", language: "en", flag: "🇺🇸", desc: "Soft, gentle" },
+  { id: "eleven-antonio", name: "Antonio", provider: "elevenlabs", voiceId: "onwK4e9ZLuTAKqWW03F9", language: "es", flag: "🇪🇸", desc: "Deep, Spanish Male" },
+  { id: "eleven-marcela", name: "Marcela", provider: "elevenlabs", voiceId: "ThT5KcBe7VKqLAbHBaAt", language: "es", flag: "🇲🇽", desc: "Professional, Mexican Female" },
+  
+  // --- Vapi / Play.ht ---
+  { id: "vapi-aria", name: "Aria", provider: "vapi", voiceId: "aria", language: "en", flag: "🇺🇸", desc: "Fast, conversational" },
+  { id: "vapi-roger", name: "Roger", provider: "vapi", voiceId: "roger", language: "en", flag: "🇬🇧", desc: "British, articulate" },
+  { id: "vapi-sofia", name: "Sofia", provider: "vapi", voiceId: "sofia", language: "pt", flag: "🇧🇷", desc: "Portuguese, friendly" },
 ];
 
 const INDUSTRIES = ["Real Estate", "Insurance", "Medical", "Finance", "Car Sales", "Home Improvement", "Other"];
@@ -39,7 +50,28 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        setInput(text);
+        setIsListening(false);
+        // Auto-send if needed: handleSend(text);
+      };
+      recognitionRef.current.onend = () => setIsListening(false);
+      recognitionRef.current.onerror = () => setIsListening(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (open && agent) {
@@ -53,16 +85,51 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading || !agent) return;
-    const userMsg = { role: "user", content: input };
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+    } else {
+      setIsListening(true);
+      recognitionRef.current?.start();
+    }
+  };
+
+  const speakText = async (text: string, overrideVoiceId?: string) => {
+    const vId = overrideVoiceId || agent.voice_settings?.voiceId;
+    if (!vId || isSpeaking) return;
+    setIsSpeaking(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('elevenlabs-tts', {
+        body: { text, voiceId: vId }
+      });
+      if (error) throw error;
+      
+      // Use Blob and URL.createObjectURL instead of Base64 for better performance
+      const audioBlob = data;
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audio.play();
+    } catch (err) {
+      console.error("Speech error:", err);
+      setIsSpeaking(false);
+      toast.error("Voice preview failed. Check API key.");
+    }
+  };
+
+  const handleSend = async (overrideInput?: string) => {
+    const textToSend = overrideInput || input;
+    if (!textToSend.trim() || isLoading || !agent) return;
+    
+    const userMsg = { role: "user", content: textToSend };
     setMessages(prev => [...prev, userMsg]);
-    const currentInput = input;
     setInput("");
     setIsLoading(true);
 
     try {
-      // 1. Fetch n8n config from Supabase
       const { data: plugin } = await supabase
         .from("user_plugins")
         .select("config")
@@ -73,15 +140,14 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
       const webhookUrl = plugin?.config?.webhookUrl;
 
       if (!webhookUrl) {
-        setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Error: No n8n Webhook URL found. Configure it in Plugins tab." }]);
+        const reply = "⚠️ Error: No n8n Webhook URL found. Configure it in Plugins tab.";
+        setMessages(prev => [...prev, { role: "assistant", content: reply }]);
       } else {
-        // 2. Direct fetch with 'no-cors' mode as fallback or normal POST
-        // We try normal first, as no-cors won't let us see the response body
         const response = await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: currentInput,
+            message: textToSend,
             agent_id: agent.id,
             agent_name: agent.name,
             timestamp: new Date().toISOString()
@@ -92,16 +158,16 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
           const result = await response.json();
           const reply = result.output || result.message || result.data || "Message received by n8n.";
           setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+          // Speak the reply!
+          speakText(reply);
         } else {
-          setMessages(prev => [...prev, { role: "assistant", content: "⚠️ n8n received the signal but returned an error status. Check your n8n workflow logs." }]);
+          setMessages(prev => [...prev, { role: "assistant", content: "⚠️ n8n error. Check logs." }]);
         }
       }
     } catch (err) {
-      // If we hit a CORS error, the catch block triggers. 
-      // We'll give a more helpful instruction.
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: "⚠️ Magical barrier detected (CORS)! Your browser is blocking the direct reply. Please enable 'CORS' in your n8n webhook settings or deploy the Supabase proxy function." 
+        content: "⚠️ Connection error (CORS). Please enable CORS in n8n or use the proxy." 
       }]);
     } finally {
       setIsLoading(false);
@@ -136,9 +202,13 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
           </div>
         </ScrollArea>
 
-        <div className="p-4 border-t border-border shrink-0 flex gap-2">
-          <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Type a message..." onKeyDown={e => e.key === 'Enter' && handleSend()} className="bg-secondary border-border" />
-          <Button onClick={handleSend} disabled={isLoading} className="glow-cyan"><Send className="h-4 w-4" /></Button>
+        <div className="p-4 border-t border-border shrink-0 flex gap-2 items-center">
+          <Button onClick={toggleListening} variant="outline" size="icon" className={`h-9 w-9 shrink-0 ${isListening ? "bg-red-500/20 text-red-500 border-red-500/30 animate-pulse" : "border-border"}`}>
+            {isListening ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </Button>
+          <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Type or talk..." onKeyDown={e => e.key === 'Enter' && handleSend()} className="bg-secondary border-border h-9 text-sm" />
+          <Button onClick={() => handleSend()} disabled={isLoading} className="glow-cyan h-9 w-9 p-0"><Send className="h-4 w-4" /></Button>
+          {isSpeaking && <div className="absolute right-6 bottom-20 bg-primary/20 p-2 rounded-full border border-primary/30 animate-bounce"><Volume2 className="h-4 w-4 text-primary" /></div>}
         </div>
       </DialogContent>
     </Dialog>
@@ -198,16 +268,42 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
                       {p.plugin_id === 'n8n' ? "n8n Automation (Connected)" : p.plugin_id}
                     </SelectItem>
                   ))}
+                  <SelectItem value="vapi">Vapi AI (Direct)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
               <Label>Voice Preference</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {VOICES.map(v => (
-                  <button key={v.id} onClick={() => setVoice(v.id)} className={`p-3 rounded-lg border text-sm text-left transition-all ${voice === v.id ? "border-primary bg-primary/10" : "border-border bg-secondary/50"}`}>{v.name}</button>
-                ))}
-              </div>
+              <ScrollArea className="h-[200px] rounded-md border border-border p-2 bg-secondary/30">
+                <div className="grid grid-cols-1 gap-2">
+                  {VOICE_REGISTRY.map(v => (
+                    <button key={v.id} onClick={() => setVoice(v.id)} className={`p-3 rounded-lg border text-sm text-left transition-all flex items-center justify-between ${voice === v.id ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{v.flag}</span>
+                        <div>
+                          <p className="font-bold">{v.name} <span className="text-[10px] text-muted-foreground uppercase ml-1">({v.provider})</span></p>
+                          <p className="text-[10px] text-muted-foreground">{v.desc}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-primary hover:bg-primary/10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const sampleText = v.language === 'es' ? "Hola, soy una de las voces de Callixis." : "Hi, I'm one of the Callixis voices.";
+                            speakText(sampleText, v.voiceId);
+                          }}
+                        >
+                          <Volume2 className="h-4 w-4" />
+                        </Button>
+                        {voice === v.id && <Check className="h-4 w-4 text-primary" />}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </ScrollArea>
             </div>
           </div>
         )}
@@ -221,7 +317,26 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
 
         <div className="flex justify-between mt-8 pt-4 border-t border-border">
           <Button variant="outline" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step > 0 ? "Back" : "Cancel"}</Button>
-          {step < maxStep ? <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">Next Step</Button> : <Button onClick={onClose} className="glow-cyan">Deploy Agent</Button>}
+          {step < maxStep ? <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">Next Step</Button> : <Button onClick={async () => {
+            if (!user) return;
+            try {
+              const { error } = await supabase.from("ai_agents").insert({
+                user_id: user.id,
+                name: agentName,
+                industry: industry,
+                script: script,
+                logic_provider: logicProvider,
+                voice: voice,
+                voice_settings: {
+                  provider: VOICE_REGISTRY.find(v => v.id === voice)?.provider,
+                  voiceId: VOICE_REGISTRY.find(v => v.id === voice)?.voiceId,
+                }
+              });
+              if (error) throw error;
+              toast.success("Agent deployed!");
+              onClose();
+            } catch (err: any) { toast.error(err.message); }
+          }} className="glow-cyan">Deploy Agent</Button>}
         </div>
       </DialogContent>
     </Dialog>
@@ -233,6 +348,19 @@ const AIAgents = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [activePlugins, setActivePlugins] = useState<any[]>([]);
   const [testAgent, setTestAgent] = useState<any | null>(null);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadAgents = useCallback(async () => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase.from("ai_agents").select("*").eq("user_id", user.id).order('created_at', { ascending: false });
+      if (!error && data) {
+        setAgents(data);
+      }
+    } catch (err) { console.error(err); } finally { setIsLoading(false); }
+  }, [user]);
 
   useEffect(() => {
     const loadPlugins = async () => {
@@ -241,7 +369,10 @@ const AIAgents = () => {
       if (data) setActivePlugins(data);
     };
     loadPlugins();
-  }, [user]);
+    loadAgents();
+  }, [user, loadAgents]);
+
+  const displayedAgents = agents.length > 0 ? agents : initialAgents;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -250,14 +381,14 @@ const AIAgents = () => {
         <Button className="glow-cyan h-10 px-5 font-bold" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {initialAgents.map((agent) => (
+        {displayedAgents.map((agent) => (
           <Card key={agent.id} className="bg-card border-border p-5 group hover:border-primary/30 transition-all shadow-sm">
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors"><Bot className="h-5 w-5 text-primary" /></div>
                 <div><h3 className="text-sm font-bold text-foreground">{agent.name}</h3><p className="text-xs text-muted-foreground">{agent.industry}</p></div>
               </div>
-              <Badge variant="outline" className={`${statusStyles[agent.status]} border-none font-bold uppercase text-[9px]`}>{agent.status}</Badge>
+              <Badge variant="outline" className={`${statusStyles[agent.status] || statusStyles.Idle} border-none font-bold uppercase text-[9px]`}>{agent.status}</Badge>
             </div>
             <div className="mt-6 pt-4 border-t border-border/50 flex justify-between items-center">
               <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
@@ -266,7 +397,7 @@ const AIAgents = () => {
           </Card>
         ))}
       </div>
-      <AgentWizard open={wizardOpen} onClose={() => setWizardOpen(false)} activePlugins={activePlugins} />
+      <AgentWizard open={wizardOpen} onClose={() => { setWizardOpen(false); loadAgents(); }} activePlugins={activePlugins} />
       {testAgent && <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />}
     </div>
   );
