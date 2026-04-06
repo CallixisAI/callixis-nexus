@@ -186,8 +186,7 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value);
-      // Use regex split to avoid literal newline mangling in deployment
-      const lines = chunk.split(/?
+      const lines = chunk.split(/\r?\n/);
 /);
       for (const rawLine of lines) {
         const line = rawLine.trim();
