@@ -187,7 +187,6 @@ async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any)
       if (done) break;
       const chunk = decoder.decode(value);
       const lines = chunk.split(/\r?\n/);
-/);
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line.startsWith("data: ")) continue;
