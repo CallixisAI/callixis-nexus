@@ -130,44 +130,26 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     setIsLoading(true);
 
     try {
-      const { data: plugin } = await supabase
-        .from("user_plugins")
-        .select("config")
-        .eq("user_id", user?.id)
-        .eq("plugin_id", "n8n")
-        .single();
-
-      const webhookUrl = plugin?.config?.webhookUrl;
-
-      if (!webhookUrl) {
-        const reply = "⚠️ Error: No n8n Webhook URL found. Configure it in Plugins tab.";
-        setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-      } else {
-        const response = await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: textToSend,
-            agent_id: agent.id,
-            agent_name: agent.name,
-            timestamp: new Date().toISOString()
-          })
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          const reply = result.output || result.message || result.data || "Message received by n8n.";
-          setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-          // Speak the reply!
-          speakText(reply);
-        } else {
-          setMessages(prev => [...prev, { role: "assistant", content: "⚠️ n8n error. Check logs." }]);
+      const { data, error } = await supabase.functions.invoke('n8n-proxy', {
+        body: { 
+          message: textToSend,
+          agent_id: agent.id,
+          agent_name: agent.name,
+          user_id: user?.id
         }
-      }
-    } catch (err) {
+      });
+
+      if (error) throw error;
+
+      const reply = data.output || data.message || data.data || "Message received by n8n proxy.";
+      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+      // Speak the reply!
+      speakText(reply);
+      
+    } catch (err: any) {
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: "⚠️ Connection error (CORS). Please enable CORS in n8n or use the proxy." 
+        content: `⚠️ Error: ${err.message || "Connection failed. Check n8n logs."}` 
       }]);
     } finally {
       setIsLoading(false);
