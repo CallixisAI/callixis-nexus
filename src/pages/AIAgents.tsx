@@ -205,6 +205,7 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
   const [script, setScript] = useState("Hello! My name is {{agent_name}}.");
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [voice, setVoice] = useState("eleven-sarah");
+  const [logicProvider, setLogicProvider] = useState("default");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
 
