@@ -20,6 +20,7 @@ serve(async (req) => {
     const { message, agent_id, agent_name, user_id } = await req.json()
 
     // 1. Get the n8n config for this user
+    console.log('Fetching config for user_id:', user_id);
     const { data: plugin, error: pluginError } = await supabaseClient
       .from('user_plugins')
       .select('config')
@@ -27,9 +28,18 @@ serve(async (req) => {
       .eq('plugin_id', 'n8n')
       .single()
 
-    if (pluginError || !plugin?.config?.webhookUrl) {
-      throw new Error('n8n Webhook URL not configured')
+    if (pluginError) {
+      console.error('Database error:', pluginError);
+      throw new Error(`Database error: ${pluginError.message}`);
     }
+
+    if (!plugin?.config?.webhookUrl) {
+      console.error('Config missing webhookUrl. Plugin data:', plugin);
+      throw new Error('n8n Webhook URL not configured in Plugins tab');
+    }
+
+    console.log('Forwarding to n8n:', plugin.config.webhookUrl);
+
 
     // 2. Forward request to n8n
     const n8nResponse = await fetch(plugin.config.webhookUrl, {

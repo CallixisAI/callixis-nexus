@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Plus, Play, Pause, Wand2, ChevronRight, ChevronLeft, FileText, Zap, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X } from "lucide-react";
+import { Bot, Plus, Play, Pause, Wand2, ChevronRight, ChevronLeft, FileText, Zap, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -203,8 +203,36 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
   const [agentName, setAgentName] = useState("");
   const [industry, setIndustry] = useState("");
   const [script, setScript] = useState("Hello! My name is {{agent_name}}.");
-  const [voice, setVoice] = useState("sarah");
-  const [logicProvider, setLogicProvider] = useState("default");
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+  const [voice, setVoice] = useState("eleven-sarah");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+
+  const speakText = async (text: string, voiceId: string) => {
+    if (isSpeaking) return;
+    setIsSpeaking(true);
+    setActiveVoiceId(voiceId);
+    try {
+      const { data, error } = await supabase.functions.invoke('elevenlabs-tts', {
+        body: { text, voiceId }
+      });
+      if (error) throw error;
+      
+      const audioUrl = URL.createObjectURL(data);
+      const audio = new Audio(audioUrl);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setActiveVoiceId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      await audio.play();
+    } catch (err) {
+      console.error("Speech error:", err);
+      setIsSpeaking(false);
+      setActiveVoiceId(null);
+      toast.error("Voice preview failed. Ensure ElevenLabs is configured.");
+    }
+  };
   
   const WIZARD_STEPS = ["Basics", "Script", "Brain & Logic", "Review"];
   const maxStep = WIZARD_STEPS.length - 1;
@@ -233,7 +261,62 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
         {step === 1 && (
           <div className="space-y-4">
             <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> Call Script</Label>
-            <Textarea value={script} onChange={e => setScript(e.target.value)} rows={8} className="bg-secondary/50 border-border" />
+            <div className="relative">
+              <Textarea 
+                value={script} 
+                onChange={e => setScript(e.target.value)} 
+                rows={8} 
+                className="bg-secondary/50 border-border pr-12" 
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute top-2 right-2 h-8 w-8 text-primary hover:bg-primary/10"
+                onClick={async () => {
+                  if (!industry) {
+                    toast.error("Please select an industry first");
+                    return;
+                  }
+                  setIsGeneratingScript(true);
+                  try {
+                    const prompt = `Generate a professional cold call script for a ${industry} agent. The script should:
+- Be friendly and professional
+- Include a clear value proposition
+- Have a natural objection handling section
+- End with a clear call to action
+- Use {{agent_name}} as a placeholder for the agent's name
+- Keep it under 400 words`;
+                    
+                    const { data, error } = await supabase.functions.invoke('plugin-setup-chat', {
+                      body: {
+                        messages: [{ role: 'user', content: prompt }],
+                        pluginId: 'script-generator'
+                      }
+                    });
+
+                    if (error) throw error;
+                    
+                    const generated = data?.output || data?.message || data;
+                    if (generated) {
+                      setScript(generated);
+                      toast.success("Script generated!");
+                    } else {
+                      throw new Error("No response from AI");
+                    }
+                  } catch (err: any) {
+                    console.error(err);
+                    toast.error("Failed to generate. Try again.");
+                  } finally {
+                    setIsGeneratingScript(false);
+                  }
+                }}
+                disabled={isGeneratingScript}
+              >
+                {isGeneratingScript ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Tip: Use {'{{agent_name}}'} as a placeholder for the agent's name.</p>
           </div>
         )}
 
@@ -271,14 +354,15 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-primary hover:bg-primary/10"
+                          disabled={isSpeaking && activeVoiceId !== v.voiceId}
+                          className={`h-8 w-8 text-primary hover:bg-primary/10 ${activeVoiceId === v.voiceId ? "animate-pulse" : ""}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             const sampleText = v.language === 'es' ? "Hola, soy una de las voces de Callixis." : "Hi, I'm one of the Callixis voices.";
                             speakText(sampleText, v.voiceId);
                           }}
                         >
-                          <Volume2 className="h-4 w-4" />
+                          {activeVoiceId === v.voiceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
                         </Button>
                         {voice === v.id && <Check className="h-4 w-4 text-primary" />}
                       </div>
