@@ -289,16 +289,19 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
 - Use {{agent_name}} as a placeholder for the agent's name
 - Keep it under 400 words`;
                     
-                    const { data, error } = await supabase.functions.invoke('plugin-setup-chat', {
+                    const { data, error } = await supabase.functions.invoke('n8n-proxy', {
                       body: {
-                        messages: [{ role: 'user', content: prompt }],
-                        pluginId: 'script-generator'
+                        message: prompt,
+                        agent_id: 'script-generator',
+                        agent_name: 'Genie',
+                        user_id: user?.id,
+                        context: 'Generate Script'
                       }
                     });
 
                     if (error) throw error;
                     
-                    const generated = data?.output || data?.message || data;
+                    const generated = data?.output || data?.message || data?.data || data;
                     if (generated) {
                       setScript(generated);
                       toast.success("Script generated!");
