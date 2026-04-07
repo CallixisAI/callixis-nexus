@@ -130,6 +130,7 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     setIsLoading(true);
 
     try {
+      console.log('Invoking n8n-proxy with:', { agent_id: agent.id, user_id: user?.id });
       const { data, error } = await supabase.functions.invoke('n8n-proxy', {
         body: { 
           message: textToSend,
@@ -139,17 +140,26 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Proxy Error Object:', error);
+        throw new Error(error.message || 'The proxy function returned an error.');
+      }
 
-      const reply = data.output || data.message || data.data || "Message received by n8n proxy.";
+      console.log('Proxy Response Data:', data);
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      const reply = data.output || data.message || data.data || "Message received, but no text output found in n8n response.";
       setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-      // Speak the reply!
       speakText(reply);
       
     } catch (err: any) {
+      console.error('Chat Test Catch:', err);
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: `⚠️ Error: ${err.message || "Connection failed. Check n8n logs."}` 
+        content: `⚠️ Connection Error: ${err.message || "Failed to reach the brain. Ensure n8n-proxy is deployed and n8n is configured."}` 
       }]);
     } finally {
       setIsLoading(false);
@@ -289,6 +299,7 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
 - Use {{agent_name}} as a placeholder for the agent's name
 - Keep it under 400 words`;
                     
+                    console.log('Wand invoking n8n-proxy...');
                     const { data, error } = await supabase.functions.invoke('n8n-proxy', {
                       body: {
                         message: prompt,
@@ -299,18 +310,29 @@ const AgentWizard = ({ open, onClose, activePlugins }: { open: boolean; onClose:
                       }
                     });
 
-                    if (error) throw error;
+                    if (error) {
+                      console.error('Wand Proxy Error:', error);
+                      throw new Error(error.message || 'Wand could not reach the proxy.');
+                    }
                     
+                    if (data.error) {
+                      throw new Error(data.error);
+                    }
+
                     const generated = data?.output || data?.message || data?.data || data;
-                    if (generated) {
+                    if (generated && typeof generated === 'string') {
                       setScript(generated);
                       toast.success("Script generated!");
+                    } else if (generated && typeof generated === 'object') {
+                       // Fallback for object responses
+                       setScript(JSON.stringify(generated, null, 2));
+                       toast.success("Script generated (raw format)!");
                     } else {
-                      throw new Error("No response from AI");
+                      throw new Error("n8n responded but no script text was found. Ensure your workflow returns an 'output' field.");
                     }
                   } catch (err: any) {
-                    console.error(err);
-                    toast.error("Failed to generate. Try again.");
+                    console.error('Wand Error Catch:', err);
+                    toast.error(`Wand Failed: ${err.message}`);
                   } finally {
                     setIsGeneratingScript(false);
                   }
