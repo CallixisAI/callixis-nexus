@@ -542,7 +542,10 @@ const AIAgents = () => {
     loadAgents();
   }, [user, loadAgents]);
 
-  const displayedAgents = agents.length > 0 ? agents : (isLoading ? [] : initialAgents);
+  const displayedAgents = [
+    ...initialAgents.map(a => ({ ...a, is_test: true, status: a.status || 'Running' })),
+    ...agents
+  ];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -566,7 +569,13 @@ const AIAgents = () => {
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors"><Bot className="h-5 w-5 text-primary" /></div>
-                  <div><h3 className="text-sm font-bold text-foreground">{agent.name}</h3><p className="text-xs text-muted-foreground">{agent.industry}</p></div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-foreground">{agent.name}</h3>
+                      {agent.is_test && <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20 text-[8px] h-4 px-1 font-bold">TEST</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{agent.industry}</p>
+                  </div>
                 </div>
                 <Badge variant="outline" className={`${statusStyles[agent.status] || statusStyles.Idle} border-none font-bold uppercase text-[9px]`}>{agent.status}</Badge>
               </div>
@@ -574,24 +583,26 @@ const AIAgents = () => {
                 <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"><Play className="h-4 w-4" /></Button>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
-                    onClick={async () => {
-                      if (!confirm("Are you sure you want to delete this agent?")) return;
-                      try {
-                        const { error } = await supabase.from("ai_agents").delete().eq("id", agent.id);
-                        if (error) throw error;
-                        toast.success("Agent deleted");
-                        loadAgents();
-                      } catch (err: any) {
-                        toast.error(err.message);
-                      }
-                    }}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+                  {!agent.is_test && (
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
+                      onClick={async () => {
+                        if (!confirm("Are you sure you want to delete this agent?")) return;
+                        try {
+                          const { error } = await supabase.from("ai_agents").delete().eq("id", agent.id);
+                          if (error) throw error;
+                          toast.success("Agent deleted");
+                          loadAgents();
+                        } catch (err: any) {
+                          toast.error(err.message);
+                        }
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </Card>
