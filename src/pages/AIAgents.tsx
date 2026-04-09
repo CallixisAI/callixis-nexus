@@ -242,13 +242,24 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
     setIsSpeaking(true);
     setActiveVoiceId(voiceId);
     try {
+      console.log("🧞 Genie: Requesting TTS from ElevenLabs for voice:", voiceId);
       const response = await supabase.functions.invoke('elevenlabs-tts', {
         body: { text, voiceId }
       });
       
-      if (response.error) throw response.error;
+      if (response.error) {
+        console.error("🧞 Genie: Edge Function Error:", response.error);
+        throw response.error;
+      }
       
-      const audioUrl = URL.createObjectURL(response.data);
+      // The response.data should be a Blob for audio/mpeg
+      const audioBlob = response.data;
+      if (!(audioBlob instanceof Blob)) {
+        console.error("🧞 Genie: Expected Blob but got:", typeof audioBlob);
+        throw new Error("Invalid audio data received from server.");
+      }
+
+      const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audio.onended = () => {
         setIsSpeaking(false);
@@ -256,11 +267,13 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
         URL.revokeObjectURL(audioUrl);
       };
       await audio.play();
-    } catch (err) {
-      console.error("Speech error:", err);
+      console.log("🧞 Genie: Audio playing successfully.");
+    } catch (err: any) {
+      console.error("🧞 Genie: Speech error details:", err);
       setIsSpeaking(false);
       setActiveVoiceId(null);
-      toast.error("Voice preview failed. Ensure ElevenLabs is configured.");
+      // alert() is more reliable for debugging right now than toast
+      alert("Voice Preview Error: " + (err.message || "Ensure ELEVENLABS_API_KEY is set in Supabase project settings."));
     }
   };
   
