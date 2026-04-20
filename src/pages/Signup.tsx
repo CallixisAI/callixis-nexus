@@ -17,6 +17,7 @@ const Signup = () => {
   const [role, setRole] = useState<"affiliate" | "brand">("affiliate");
   const [loading, setLoading] = useState(false);
   const [isInvited, setIsInvited] = useState(false);
+  const [signupMode, setSignupMode] = useState<"pending" | "instant">("instant");
 
   // Check if this email has a pre-provisioned invite
   useEffect(() => {
@@ -57,12 +58,22 @@ const Signup = () => {
       return;
     }
 
-    // If invited, the backend trigger (SQL) will handle transferring permissions
-    // once the user is confirmed. For now, we just redirect.
+    const hasSession = !!data.session;
+    setSignupMode(hasSession ? "instant" : "pending");
     setLoading(false);
+
+    if (hasSession) {
+      toast({
+        title: "Welcome to Callixis AI",
+        description: "Your account is active. You can sign in immediately.",
+      });
+      navigate("/dashboard");
+      return;
+    }
+
     toast({
-      title: "Welcome to CalliXis AI",
-      description: "Please verify your email to activate your pre-configured permissions.",
+      title: "Account created",
+      description: "Your signup was accepted. If email confirmation is still enabled in Supabase, check your inbox before signing in.",
     });
     navigate("/login");
   };

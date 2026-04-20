@@ -167,6 +167,18 @@ const Marketplace = () => {
     loadMarketplace();
   }, [user]);
 
+  const canUseAffiliateView = role === "affiliate" || role === "admin";
+  const canUseDeskView = role === "brand" || role === "admin";
+
+  useEffect(() => {
+    if (side === "affiliate" && !canUseAffiliateView && canUseDeskView) {
+      setSide("desk");
+    }
+    if (side === "desk" && !canUseDeskView && canUseAffiliateView) {
+      setSide("affiliate");
+    }
+  }, [side, canUseAffiliateView, canUseDeskView]);
+
   const filteredAffiliateDeals = affiliateDeals.filter((deal) => {
     const matchesSearch = [deal.geo, deal.source, deal.funnel, deal.affiliateName].some((value) => value.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesGeo = selectedGeo === "All" || deal.geo.toLowerCase().includes(selectedGeo.toLowerCase());
@@ -342,8 +354,8 @@ const Marketplace = () => {
 
       <Tabs value={side} onValueChange={(value) => setSide(value as "affiliate" | "desk")}>
         <TabsList className="bg-secondary">
-          <TabsTrigger value="affiliate" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><Store className="h-4 w-4" /> Affiliate View</TabsTrigger>
-          <TabsTrigger value="desk" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><ShoppingCart className="h-4 w-4" /> Desk View</TabsTrigger>
+          {canUseAffiliateView && <TabsTrigger value="affiliate" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><Store className="h-4 w-4" /> Affiliate View</TabsTrigger>}
+          {canUseDeskView && <TabsTrigger value="desk" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><ShoppingCart className="h-4 w-4" /> Desk View</TabsTrigger>}
         </TabsList>
 
         <div className="flex items-center gap-3 mt-4 flex-wrap">
@@ -358,6 +370,10 @@ const Marketplace = () => {
         </div>
 
         <TabsContent value="affiliate" className="mt-4 space-y-6">
+          {!canUseAffiliateView ? (
+            <Card className="bg-card border-border p-6 text-sm text-muted-foreground">Affiliate auction management is available only to affiliate and admin users.</Card>
+          ) : (
+            <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
               { label: "Open Auctions", value: openDeals.length.toString(), icon: Gavel },
@@ -412,9 +428,15 @@ const Marketplace = () => {
               </Card>
             ))}
           </div>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="desk" className="mt-4 space-y-6">
+          {!canUseDeskView ? (
+            <Card className="bg-card border-border p-6 text-sm text-muted-foreground">Desk bidding is available only to brand and admin users.</Card>
+          ) : (
+            <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
               { label: "Open Auctions", value: filteredAffiliateDeals.filter((deal) => deal.status === "open").length.toString(), icon: Gavel },
@@ -476,6 +498,8 @@ const Marketplace = () => {
               );
             })}
           </div>
+            </>
+          )}
         </TabsContent>
       </Tabs>
 
