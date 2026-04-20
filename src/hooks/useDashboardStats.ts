@@ -9,6 +9,7 @@ interface DashboardStats {
   revenue: number;
   aiAgentsCount: number;
   avgResponseTime: number;
+  activeCampaignsCount: number;
 }
 
 interface CallData {
@@ -23,6 +24,7 @@ interface AgentPerformance {
   active: number;
   leads: number;
   conversion: number;
+  revenue: number;
 }
 
 interface ChannelData {
@@ -86,46 +88,63 @@ export function useDashboardStats() {
       const activeCampaigns = campaigns?.filter(c => c.status === 'active') || [];
       const activeAgents = agents?.filter(a => a.status !== 'idle') || [];
 
+      const campaignsById = new Map((campaigns || []).map((campaign) => [campaign.id, campaign]));
+
       // Calculate stats
       const totalCalls = records.length;
       const completedCalls = records.filter(r => r.status === 'completed').length;
       const conversion = totalCalls > 0 ? Math.round((completedCalls / totalCalls) * 100) : 0;
-      const revenue = records.reduce((sum, r) => sum + (r.revenue || 0), 0);
+      const revenue = records.reduce((sum, r) => sum + Number(r.revenue || 0), 0);
       const activeLeads = records.filter(r => r.is_qualified).length;
 
-      // Last 7 days call data
-      const last7Days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      const callData: CallData[] = last7Days.map(day => {
-        const dayRecords = records.filter(r => {
-          if (!r.call_date) return false;
-          const d = new Date(r.call_date);
-          const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-          return dayName === day;
-        });
+      // Last 7 days call data based on actual recent dates, not weekday buckets.
+      const callData: CallData[] = Array.from({ length: 7 }, (_, index) => {
+        const date = new Date();
+        date.setHours(0, 0, 0, 0);
+        date.setDate(date.getDate() - (6 - index));
+        const key = date.toISOString().slice(0, 10);
+        const dayRecords = records.filter(r => r.call_date?.slice(0, 10) === key);
         return {
-          name: day,
+          name: date.toLocaleDateString('en-US', { weekday: 'short' }),
           calls: dayRecords.length,
           conversions: dayRecords.filter(r => r.status === 'completed').length,
-          revenue: dayRecords.reduce((sum, r) => sum + (r.revenue || 0), 0)
+          revenue: dayRecords.reduce((sum, r) => sum + Number(r.revenue || 0), 0)
         };
       });
 
-      // Agent performance by industry (from campaigns)
-      const industryMap = activeCampaigns.reduce((acc, c) => {
-        const ind = c.industry || 'Other';
-        if (!acc[ind]) acc[ind] = { active: 0, leads: 0 };
-        acc[ind].active += 1;
+      const industryMap = (campaigns || []).reduce((acc, campaign) => {
+        const industry = campaign.industry || 'Other';
+        if (!acc[industry]) {
+          acc[industry] = { campaignIds: new Set<string>(), leads: 0, completed: 0, revenue: 0 };
+        }
+        acc[industry].campaignIds.add(campaign.id);
         return acc;
-      }, {} as Record<string, { active: number; leads: number }>);
+      }, {} as Record<string, { campaignIds: Set<string>; leads: number; completed: number; revenue: number }>);
 
-      const agentPerformance: AgentPerformance[] = Object.entries(industryMap).map(([name, data]) => ({
-        name,
-        active: data.active,
-        leads: data.leads * 10, // Estimate
-        conversion: Math.floor(Math.random() * 10 + 10) // Placeholder
-      }));
+      records.forEach((record) => {
+        const campaign = campaignsById.get(record.campaign_id);
+        const industry = campaign?.industry || 'Other';
+        if (!industryMap[industry]) {
+          industryMap[industry] = { campaignIds: new Set<string>(), leads: 0, completed: 0, revenue: 0 };
+        }
+        industryMap[industry].leads += 1;
+        industryMap[industry].revenue += Number(record.revenue || 0);
+        if (record.status === 'completed') {
+          industryMap[industry].completed += 1;
+        }
+      });
 
-      // Channel data (placeholder - would need a channel field in call_records)
+      const agentPerformance: AgentPerformance[] = Object.entries(industryMap)
+        .map(([name, data]) => ({
+          name,
+          active: data.campaignIds.size,
+          leads: data.leads,
+          conversion: data.leads > 0 ? Math.round((data.completed / data.leads) * 100) : 0,
+          revenue: data.revenue,
+        }))
+        .sort((a, b) => b.leads - a.leads);
+
+      // Channel data (still inferred from available app capabilities until a channel field exists)
       const channelData: ChannelData[] = [
         { name: "Voice", value: 45, fill: "hsl(170, 100%, 45%)" },
         { name: "SMS", value: 25, fill: "hsl(200, 80%, 55%)" },
@@ -134,12 +153,12 @@ export function useDashboardStats() {
       ];
 
       // Live agents (placeholder - would need real-time status)
-      const liveAgents: LiveAgent[] = (agents || []).slice(0, 5).map((a, i) => ({
+      const liveAgents: LiveAgent[] = (agents || []).slice(0, 5).map((a) => ({
         id: a.id,
         name: a.name,
         status: a.status === 'idle' ? 'idle' : 'on-call',
         lead: '—',
-        geo: '🌍',
+        geo: a.industry || 'Global',
         duration: '0:00',
         campaign: a.industry || 'Standby'
       }));
@@ -147,9 +166,9 @@ export function useDashboardStats() {
       // Recent activity (from recent call records)
       const recentActivity: RecentActivity[] = records.slice(0, 6).map(r => ({
         icon: r.status === 'completed' ? 'TrendingUp' : 'Phone',
-        action: r.status === 'completed' ? 'Call completed' : 'Call initiated',
+        action: r.status === 'completed' ? 'Call completed' : 'Call updated',
         detail: `${r.contact_name || 'Unknown'} - ${r.contact_phone || 'No phone'}`,
-        time: r.call_date ? `${Math.floor((Date.now() - new Date(r.call_date).getTime()) / 60000)} min ago` : 'Just now',
+        time: r.call_date ? `${Math.max(1, Math.floor((Date.now() - new Date(r.call_date).getTime()) / 60000))} min ago` : 'Just now',
         type: r.status === 'completed' ? 'success' : 'info'
       }));
 
@@ -160,7 +179,8 @@ export function useDashboardStats() {
           conversion,
           revenue,
           aiAgentsCount: activeAgents.length,
-          avgResponseTime: 1.8
+          avgResponseTime: 1.8,
+          activeCampaignsCount: activeCampaigns.length
         } as DashboardStats,
         callData,
         agentPerformance,

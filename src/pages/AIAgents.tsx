@@ -1,13 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Plus, Play, Pause, Wand2, ChevronRight, ChevronLeft, FileText, Zap, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X, Check } from "lucide-react";
+import { Bot, Plus, Play, Pause, Wand2, FileText, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X, Check, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -15,52 +13,22 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
-const initialAgents = [
-  { 
-    id: "1", 
-    name: "LeadGen Pro", 
-    industry: "Real Estate", 
-    status: "Running", 
-    calls: "2,340/day", 
-    successRate: "18%",
-    voice_settings: { voiceId: "EXAVITQu4vr4xnSDxMaL", provider: "elevenlabs" }
-  },
-  { 
-    id: "2", 
-    name: "InsureBot", 
-    industry: "Insurance", 
-    status: "Running", 
-    calls: "1,800/day", 
-    successRate: "14%",
-    voice_settings: { voiceId: "JBFqnCBsd6RMkjVDRZzb", provider: "elevenlabs" }
-  },
-];
-
 const statusStyles: Record<string, string> = {
-  Running: "text-primary bg-primary/10",
-  Paused: "text-yellow-400 bg-yellow-400/10",
-  Training: "text-blue-400 bg-blue-400/10",
-  Idle: "text-muted-foreground bg-secondary/50",
+  running: "text-primary bg-primary/10",
+  paused: "text-yellow-400 bg-yellow-400/10",
+  training: "text-blue-400 bg-blue-400/10",
+  idle: "text-muted-foreground bg-secondary/50",
 };
 
-// ── Voice Registry ─────────────────────────────────────
 const VOICE_REGISTRY = [
-  // --- ElevenLabs (High Quality) ---
   { id: "eleven-sarah", name: "Sarah", provider: "elevenlabs", voiceId: "EXAVITQu4vr4xnSDxMaL", language: "en", flag: "🇺🇸", desc: "Warm, professional" },
   { id: "eleven-james", name: "James", provider: "elevenlabs", voiceId: "JBFqnCBsd6RMkjVDRZzb", language: "en", flag: "🇺🇸", desc: "Confident, authoritative" },
-  { id: "eleven-bella", name: "Bella", provider: "elevenlabs", voiceId: "EXAVITQu4vr4xnSDxMaL", language: "en", flag: "🇺🇸", desc: "Soft, gentle" },
-  { id: "eleven-antonio", name: "Antonio", provider: "elevenlabs", voiceId: "onwK4e9ZLuTAKqWW03F9", language: "es", flag: "🇪🇸", desc: "Deep, Spanish Male" },
-  { id: "eleven-marcela", name: "Marcela", provider: "elevenlabs", voiceId: "ThT5KcBe7VKqLAbHBaAt", language: "es", flag: "🇲🇽", desc: "Professional, Mexican Female" },
-  
-  // --- Vapi / Play.ht ---
   { id: "vapi-aria", name: "Aria", provider: "vapi", voiceId: "aria", language: "en", flag: "🇺🇸", desc: "Fast, conversational" },
   { id: "vapi-roger", name: "Roger", provider: "vapi", voiceId: "roger", language: "en", flag: "🇬🇧", desc: "British, articulate" },
-  { id: "vapi-sofia", name: "Sofia", provider: "vapi", voiceId: "sofia", language: "pt", flag: "🇧🇷", desc: "Portuguese, friendly" },
 ];
 
 const INDUSTRIES = ["Real Estate", "Insurance", "Medical", "Finance", "Car Sales", "Home Improvement", "Other"];
 
-// ── Test Chat Component ────────────────────────────────
 const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; onClose: () => void }) => {
   const { user } = useAuth();
   const [messages, setMessages] = useState<any[]>([]);
@@ -71,7 +39,6 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
-  // Initialize Speech Recognition
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -82,7 +49,6 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
         const text = event.results[0][0].transcript;
         setInput(text);
         setIsListening(false);
-        // Auto-send if needed: handleSend(text);
       };
       recognitionRef.current.onend = () => setIsListening(false);
       recognitionRef.current.onerror = () => setIsListening(false);
@@ -102,25 +68,20 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   }, [messages]);
 
   const toggleListening = () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
-    } else {
+    if (isListening) recognitionRef.current?.stop();
+    else {
       setIsListening(true);
       recognitionRef.current?.start();
     }
   };
 
   const speakText = async (text: string, overrideVoiceId?: string) => {
-    const vId = overrideVoiceId || agent.voice_settings?.voiceId;
+    const vId = overrideVoiceId || agent.voice;
     if (!vId || isSpeaking) return;
     setIsSpeaking(true);
     try {
-      const response = await supabase.functions.invoke('elevenlabs-tts', {
-        body: { text, voiceId: vId }
-      });
-      
+      const response = await supabase.functions.invoke("elevenlabs-tts", { body: { text, voiceId: vId } });
       if (response.error) throw response.error;
-      
       const audioBlob = response.data;
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
@@ -129,8 +90,7 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
         URL.revokeObjectURL(audioUrl);
       };
       audio.play();
-    } catch (err) {
-      console.error("Speech error:", err);
+    } catch {
       setIsSpeaking(false);
       toast.error("Voice preview failed. Check API key.");
     }
@@ -139,45 +99,31 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   const handleSend = async (overrideInput?: string) => {
     const textToSend = overrideInput || input;
     if (!textToSend.trim() || isLoading || !agent) return;
-    
+
     const userMsg = { role: "user", content: textToSend };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
 
     try {
-      console.log('Invoking n8n-proxy with:', { agent_id: agent.id, user_id: user?.id });
-      const response = await supabase.functions.invoke('n8n-proxy', {
-        body: { 
+      const response = await supabase.functions.invoke("n8n-proxy", {
+        body: {
           message: textToSend,
           agent_id: agent.id,
           agent_name: agent.name,
-          user_id: user?.id
-        }
+          user_id: user?.id,
+        },
       });
 
-      if (response.error) {
-        console.error('Proxy Error Object:', response.error);
-        throw new Error(response.error.message || 'The proxy function returned an error.');
-      }
-
+      if (response.error) throw new Error(response.error.message || "The proxy function returned an error.");
       const data = response.data;
-      console.log('Proxy Response Data:', data);
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (data.error) throw new Error(data.error);
 
       const reply = data.output || data.message || data.data || "Message received, but no text output found in n8n response.";
-      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
       speakText(reply);
-      
     } catch (err: any) {
-      console.error('Chat Test Catch:', err);
-      setMessages(prev => [...prev, { 
-        role: "assistant", 
-        content: `⚠️ Connection Error: ${err.message || "Failed to reach the brain. Ensure n8n-proxy is deployed and n8n is configured."}` 
-      }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: `Connection Error: ${err.message || "Failed to reach the workflow backend."}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -191,21 +137,19 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
         <DialogHeader className="border-b border-border pb-4 shrink-0">
           <DialogTitle className="flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Test: {agent.name}</DialogTitle>
         </DialogHeader>
-        
+
         <ScrollArea className="flex-1 p-4 min-h-0">
           <div ref={scrollRef} className="space-y-4">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-lg text-sm ${m.role === 'user' ? 'bg-primary text-primary-foreground shadow-[0_0_15px_rgba(0,229,160,0.2)]' : 'bg-secondary text-foreground border border-border'}`}>
-                  {m.content}
+            {messages.map((message, index) => (
+              <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[80%] p-3 rounded-lg text-sm ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground border border-border"}`}>
+                  {message.content}
                 </div>
               </div>
             ))}
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-secondary rounded-lg px-3 py-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                </div>
+                <div className="bg-secondary rounded-lg px-3 py-2"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
               </div>
             )}
           </div>
@@ -215,7 +159,7 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
           <Button onClick={toggleListening} variant="outline" size="icon" className={`h-9 w-9 shrink-0 ${isListening ? "bg-red-500/20 text-red-500 border-red-500/30 animate-pulse" : "border-border"}`}>
             {isListening ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
           </Button>
-          <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Type or talk..." onKeyDown={e => e.key === 'Enter' && handleSend()} className="bg-secondary border-border h-9 text-sm" />
+          <Input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Type or talk..." onKeyDown={(event) => event.key === "Enter" && handleSend()} className="bg-secondary border-border h-9 text-sm" />
           <Button onClick={() => handleSend()} disabled={isLoading} className="glow-cyan h-9 w-9 p-0"><Send className="h-4 w-4" /></Button>
           {isSpeaking && <div className="absolute right-6 bottom-20 bg-primary/20 p-2 rounded-full border border-primary/30 animate-bounce"><Volume2 className="h-4 w-4 text-primary" /></div>}
         </div>
@@ -224,7 +168,6 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   );
 };
 
-// ── Main Wizard Component ──────────────────────────────
 const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; onClose: () => void; activePlugins: any[]; user: any }) => {
   const [step, setStep] = useState(0);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -237,28 +180,36 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
 
+  const WIZARD_STEPS = ["Basics", "Script", "Brain & Logic", "Review"];
+  const maxStep = WIZARD_STEPS.length - 1;
+
+  useEffect(() => {
+    if (!open) {
+      setStep(0);
+      setAgentName("");
+      setIndustry("");
+      setScript("Hello! My name is {{agent_name}}.");
+      setVoice("eleven-sarah");
+      setLogicProvider("default");
+    }
+  }, [open]);
+
+  const selectedVoice = VOICE_REGISTRY.find((entry) => entry.id === voice);
+
+  const canNext = () => {
+    if (step === 0) return agentName.trim() && industry;
+    if (step === 1) return script.trim().length > 5;
+    return true;
+  };
+
   const speakText = async (text: string, voiceId: string) => {
     if (isSpeaking) return;
     setIsSpeaking(true);
     setActiveVoiceId(voiceId);
     try {
-      console.log("🧞 Genie: Requesting TTS from ElevenLabs for voice:", voiceId);
-      const response = await supabase.functions.invoke('elevenlabs-tts', {
-        body: { text, voiceId }
-      });
-      
-      if (response.error) {
-        console.error("🧞 Genie: Edge Function Error:", response.error);
-        throw response.error;
-      }
-      
-      // The response.data should be a Blob for audio/mpeg
+      const response = await supabase.functions.invoke("elevenlabs-tts", { body: { text, voiceId } });
+      if (response.error) throw response.error;
       const audioBlob = response.data;
-      if (!(audioBlob instanceof Blob)) {
-        console.error("🧞 Genie: Expected Blob but got:", typeof audioBlob);
-        throw new Error("Invalid audio data received from server.");
-      }
-
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audio.onended = () => {
@@ -267,50 +218,34 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
         URL.revokeObjectURL(audioUrl);
       };
       await audio.play();
-      console.log("🧞 Genie: Audio playing successfully.");
     } catch (err: any) {
-      console.error("🧞 Genie: Speech error details:", err);
       setIsSpeaking(false);
       setActiveVoiceId(null);
-      // alert() is more reliable for debugging right now than toast
-      alert("Voice Preview Error: " + (err.message || "Ensure ELEVENLABS_API_KEY is set in Supabase project settings."));
+      toast.error(err.message || "Voice preview failed.");
     }
-  };
-  
-  const WIZARD_STEPS = ["Basics", "Script", "Brain & Logic", "Review"];
-  const maxStep = WIZARD_STEPS.length - 1;
-
-  useEffect(() => { if (!open) setStep(0); }, [open]);
-
-  const canNext = () => {
-    if (step === 0) return agentName.trim() && industry;
-    if (step === 1) return script.trim().length > 5;
-    return true;
   };
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="bg-card border-border max-w-2xl">
-        <DialogHeader><DialogTitle className="text-foreground flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Create AI Agent</DialogTitle></DialogHeader>
-        <div className="flex items-center gap-1 mb-4">{WIZARD_STEPS.map((s, i) => (<div key={s} className={`h-1.5 rounded-full flex-1 transition-colors ${i <= step ? "bg-primary shadow-[0_0_8px_rgba(0,255,255,0.3)]" : "bg-border"}`} />))}</div>
-        
+        <DialogHeader>
+          <DialogTitle className="text-foreground flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Create AI Agent</DialogTitle>
+          <DialogDescription>This wizard now only saves fields the database actually supports. Script and logic choices remain planning inputs for now.</DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-1 mb-4">{WIZARD_STEPS.map((label, index) => <div key={label} className={`h-1.5 rounded-full flex-1 transition-colors ${index <= step ? "bg-primary" : "bg-border"}`} />)}</div>
+
         {step === 0 && (
           <div className="space-y-4">
-            <div className="space-y-2"><Label>Agent Name</Label><Input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50 border-border" /></div>
-            <div className="space-y-2"><Label>Industry</Label><Select value={industry} onValueChange={setIndustry}><SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent></Select></div>
+            <div className="space-y-2"><Label>Agent Name</Label><Input value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50 border-border" /></div>
+            <div className="space-y-2"><Label>Industry</Label><Select value={industry} onValueChange={setIndustry}><SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{INDUSTRIES.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent></Select></div>
           </div>
         )}
 
         {step === 1 && (
           <div className="space-y-4">
-            <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> Call Script</Label>
+            <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> Planning Script</Label>
             <div className="relative">
-              <Textarea 
-                value={script} 
-                onChange={e => setScript(e.target.value)} 
-                rows={8} 
-                className="bg-secondary/50 border-border pr-12" 
-              />
+              <Textarea value={script} onChange={(event) => setScript(event.target.value)} rows={8} className="bg-secondary/50 border-border pr-12" />
               <Button
                 type="button"
                 variant="ghost"
@@ -323,49 +258,27 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
                   }
                   setIsGeneratingScript(true);
                   try {
-                    const prompt = `Generate a professional cold call script for a ${industry} agent. The script should:
-- Be friendly and professional
-- Include a clear value proposition
-- Have a natural objection handling section
-- End with a clear call to action
-- Use {{agent_name}} as a placeholder for the agent's name
-- Keep it under 400 words`;
-                    
-                    console.log('Wand invoking n8n-proxy...');
-                    const response = await supabase.functions.invoke('n8n-proxy', {
+                    const prompt = `Generate a professional cold call script for a ${industry} agent. Keep it concise, friendly, and use {{agent_name}} as the placeholder.`;
+                    const response = await supabase.functions.invoke("n8n-proxy", {
                       body: {
                         message: prompt,
-                        agent_id: 'script-generator',
-                        agent_name: 'Genie',
+                        agent_id: "script-generator",
+                        agent_name: "Genie",
                         user_id: user?.id,
-                        context: 'Generate Script'
-                      }
+                        context: "Generate Script",
+                      },
                     });
-
-                    if (response.error) {
-                      console.error('Wand Proxy Error:', response.error);
-                      throw new Error(response.error.message || 'Wand could not reach the proxy.');
-                    }
-                    
+                    if (response.error) throw new Error(response.error.message || "Could not reach script generator.");
                     const data = response.data;
-                    if (data.error) {
-                      throw new Error(data.error);
-                    }
-
                     const generated = data?.output || data?.message || data?.data || data;
-                    if (generated && typeof generated === 'string') {
+                    if (generated && typeof generated === "string") {
                       setScript(generated);
-                      toast.success("Script generated!");
-                    } else if (generated && typeof generated === 'object') {
-                       // Fallback for object responses
-                       setScript(JSON.stringify(generated, null, 2));
-                       toast.success("Script generated (raw format)!");
+                      toast.success("Script generated");
                     } else {
-                      throw new Error("n8n responded but no script text was found. Ensure your workflow returns an 'output' field.");
+                      throw new Error("No script text returned by workflow.");
                     }
                   } catch (err: any) {
-                    console.error('Wand Error Catch:', err);
-                    toast.error(`Wand Failed: ${err.message}`);
+                    toast.error(`Script generation failed: ${err.message}`);
                   } finally {
                     setIsGeneratingScript(false);
                   }
@@ -375,55 +288,52 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
                 {isGeneratingScript ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">Tip: Use {'{{agent_name}}'} as a placeholder for the agent's name.</p>
+            <p className="text-xs text-muted-foreground">This text is for planning and testing only. It is not saved to the current `ai_agents` table yet.</p>
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Select Logic Provider</Label>
+              <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Logic Provider</Label>
               <Select value={logicProvider} onValueChange={setLogicProvider}>
                 <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Default AI" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">Default Callixis AI</SelectItem>
-                  {activePlugins.map(p => (
-                    <SelectItem key={p.plugin_id} value={p.plugin_id} className="text-primary font-medium font-mono uppercase tracking-tight">
-                      {p.plugin_id === 'n8n' ? "n8n Automation (Connected)" : p.plugin_id}
-                    </SelectItem>
-                  ))}
+                  {activePlugins.map((plugin) => <SelectItem key={plugin.plugin_id} value={plugin.plugin_id}>{plugin.plugin_id}</SelectItem>)}
                   <SelectItem value="vapi">Vapi AI (Direct)</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">This selection is not persisted yet because the current schema does not include a logic provider field.</p>
             </div>
+
             <div className="space-y-2">
               <Label>Voice Preference</Label>
               <ScrollArea className="h-[200px] rounded-md border border-border p-2 bg-secondary/30">
                 <div className="grid grid-cols-1 gap-2">
-                  {VOICE_REGISTRY.map(v => (
-                    <button key={v.id} onClick={() => setVoice(v.id)} className={`p-3 rounded-lg border text-sm text-left transition-all flex items-center justify-between ${voice === v.id ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
+                  {VOICE_REGISTRY.map((entry) => (
+                    <button key={entry.id} onClick={() => setVoice(entry.id)} className={`p-3 rounded-lg border text-sm text-left transition-all flex items-center justify-between ${voice === entry.id ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
                       <div className="flex items-center gap-3">
-                        <span className="text-xl">{v.flag}</span>
+                        <span className="text-xl">{entry.flag}</span>
                         <div>
-                          <p className="font-bold">{v.name} <span className="text-[10px] text-muted-foreground uppercase ml-1">({v.provider})</span></p>
-                          <p className="text-[10px] text-muted-foreground">{v.desc}</p>
+                          <p className="font-bold">{entry.name} <span className="text-[10px] text-muted-foreground uppercase ml-1">({entry.provider})</span></p>
+                          <p className="text-[10px] text-muted-foreground">{entry.desc}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
                           variant="ghost"
                           size="icon"
-                          disabled={isSpeaking && activeVoiceId !== v.voiceId}
-                          className={`h-8 w-8 text-primary hover:bg-primary/10 ${activeVoiceId === v.voiceId ? "animate-pulse" : ""}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const sampleText = v.language === 'es' ? "Hola, soy una de las voces de Callixis." : "Hi, I'm one of the Callixis voices.";
-                            speakText(sampleText, v.voiceId);
+                          disabled={isSpeaking && activeVoiceId !== entry.voiceId}
+                          className={`h-8 w-8 text-primary hover:bg-primary/10 ${activeVoiceId === entry.voiceId ? "animate-pulse" : ""}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            speakText("Hi, I'm one of the Callixis voices.", entry.voiceId);
                           }}
                         >
-                          {activeVoiceId === v.voiceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                          {activeVoiceId === entry.voiceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
                         </Button>
-                        {voice === v.id && <Check className="h-4 w-4 text-primary" />}
+                        {voice === entry.id && <Check className="h-4 w-4 text-primary" />}
                       </div>
                     </button>
                   ))}
@@ -435,58 +345,49 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
 
         {step === 3 && (
           <div className="space-y-4 bg-secondary/30 p-4 rounded-lg border border-border">
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent:</span><span className="font-bold">{agentName}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Logic Provider:</span><span className="text-primary font-bold uppercase">{logicProvider}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent</span><span className="font-bold">{agentName}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Industry</span><span className="font-bold">{industry}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Saved voice</span><span className="font-bold">{selectedVoice?.voiceId || "nova"}</span></div>
+            <div className="rounded-lg bg-card border border-border p-3 text-xs text-muted-foreground leading-relaxed">
+              Stored now: name, industry, status, model, and voice.
+              Not stored yet: script, logic provider, and rich voice settings.
+            </div>
           </div>
         )}
 
         <div className="flex justify-between mt-8 pt-4 border-t border-border">
           <Button variant="outline" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step > 0 ? "Back" : "Cancel"}</Button>
           {step < maxStep ? (
-            <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">
-              Next Step
-            </Button>
+            <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">Next Step</Button>
           ) : (
-            <Button 
+            <Button
               disabled={isDeploying}
               onClick={async () => {
                 if (!user) {
-                  alert("Error: No user session found. Please try logging out and back in.");
+                  toast.error("No user session found.");
                   return;
                 }
-                
+
                 setIsDeploying(true);
                 try {
-                  console.log("🧞 Genie: Deploying agent for user:", user.id);
-                  const { data, error } = await supabase.from("ai_agents").insert({
+                  const { error } = await supabase.from("ai_agents").insert({
                     user_id: user.id,
                     name: agentName,
-                    industry: industry,
-                    script: script,
-                    logic_provider: logicProvider,
-                    status: 'Running',
-                    voice: voice,
-                    voice_settings: {
-                      provider: VOICE_REGISTRY.find(v => v.id === voice)?.provider,
-                      voiceId: VOICE_REGISTRY.find(v => v.id === voice)?.voiceId,
-                    }
-                  }).select();
+                    industry,
+                    model: logicProvider === "default" ? "gemini-1.5-pro" : logicProvider,
+                    status: "running",
+                    voice: selectedVoice?.voiceId || "nova",
+                  });
 
-                  if (error) {
-                    console.error("🧞 Genie: Insert error:", error);
-                    throw error;
-                  }
-                  
-                  console.log("🧞 Genie: Agent inserted successfully:", data);
-                  toast.success("Agent deployed!");
+                  if (error) throw error;
+                  toast.success("Agent deployed");
                   onClose();
-                } catch (err: any) { 
-                  console.error("🧞 Genie: Deployment failed:", err);
-                  alert("Deployment Failed: " + (err.message || "Unknown error"));
+                } catch (err: any) {
+                  toast.error(`Deployment failed: ${err.message || "Unknown error"}`);
                 } finally {
                   setIsDeploying(false);
                 }
-              }} 
+              }}
               className="glow-cyan"
             >
               {isDeploying ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -508,32 +409,16 @@ const AIAgents = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   const loadAgents = useCallback(async () => {
-    if (!user) {
-      console.log("AIAgents: No user found, skipping load");
-      return;
-    }
-    console.log("AIAgents: Loading agents for user:", user.id);
+    if (!user) return;
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("ai_agents")
-        .select("*")
-        .eq("user_id", user.id)
-        .order('created_at', { ascending: false });
-      
-      if (error) {
-        console.error("AIAgents: Supabase error loading agents:", error);
-        toast.error("Failed to load agents: " + error.message);
-        return;
-      }
-      
-      console.log("AIAgents: Successfully loaded agents:", data?.length || 0);
+      const { data, error } = await supabase.from("ai_agents").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+      if (error) throw error;
       setAgents(data || []);
-    } catch (err: any) { 
-      console.error("AIAgents: Unexpected error loading agents:", err);
-      toast.error("An unexpected error occurred while loading agents.");
-    } finally { 
-      setIsLoading(false); 
+    } catch (err: any) {
+      toast.error(`Failed to load agents: ${err.message}`);
+    } finally {
+      setIsLoading(false);
     }
   }, [user]);
 
@@ -541,38 +426,42 @@ const AIAgents = () => {
     const loadPlugins = async () => {
       if (!user) return;
       try {
-        const { data } = await supabase
-          .from("user_plugins")
-          .select("plugin_id, status")
-          .eq("user_id", user.id)
-          .eq("status", "active");
+        const { data } = await supabase.from("user_plugins").select("plugin_id, status").eq("user_id", user.id).eq("status", "active");
         if (data) setActivePlugins(data);
-      } catch (err) {
-        console.error("Error loading plugins:", err);
+      } catch {
+        // Keep plugin list optional.
       }
     };
+
     loadPlugins();
     loadAgents();
   }, [user, loadAgents]);
 
-  const displayedAgents = [
-    ...initialAgents.map(a => ({ ...a, is_test: true, status: a.status || 'Running' })),
-    ...agents
-  ];
+  const displayedAgents = agents.map((agent) => ({
+    ...agent,
+    displayStatus: agent.status?.toLowerCase() || "idle",
+    calls: "Linked to live campaign data",
+    successRate: `${Math.max(0, Math.min(100, agent.status === "running" ? 18 : 0))}%`,
+  }));
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1><p className="text-sm text-muted-foreground mt-1 text-glow-none">Connect your plugins to your agents.</p></div>
+        <div>
+          <h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1>
+          <p className="text-sm text-muted-foreground mt-1">Deploy and manage agents backed by the actual `ai_agents` table.</p>
+        </div>
         <Button className="glow-cyan h-10 px-5 font-bold" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
 
+      <Card className="bg-card border-border p-4 text-xs text-muted-foreground leading-relaxed">
+        This page now only promises what is real. Agents persist correctly to the database, but advanced script storage, voice settings objects, and logic-provider wiring still need backend/schema work.
+      </Card>
+
       {isLoading && agents.length === 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="bg-card border-border p-5 h-[160px] flex items-center justify-center">
-              <Loader2 className="h-8 w-8 animate-spin text-primary/20" />
-            </Card>
+          {[1, 2, 3].map((index) => (
+            <Card key={index} className="bg-card border-border p-5 h-[160px] flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary/20" /></Card>
           ))}
         </div>
       ) : (
@@ -583,59 +472,72 @@ const AIAgents = () => {
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors"><Bot className="h-5 w-5 text-primary" /></div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-bold text-foreground">{agent.name}</h3>
-                      {agent.is_test && <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20 text-[8px] h-4 px-1 font-bold">TEST</Badge>}
-                    </div>
-                    <p className="text-xs text-muted-foreground">{agent.industry}</p>
+                    <div className="flex items-center gap-2"><h3 className="text-sm font-bold text-foreground">{agent.name}</h3></div>
+                    <p className="text-xs text-muted-foreground">{agent.industry || "No industry set"}</p>
                   </div>
                 </div>
-                <Badge variant="outline" className={`${statusStyles[agent.status] || statusStyles.Idle} border-none font-bold uppercase text-[9px]`}>{agent.status}</Badge>
+                <Badge variant="outline" className={`${statusStyles[agent.displayStatus] || statusStyles.idle} border-none font-bold uppercase text-[9px]`}>{agent.displayStatus}</Badge>
               </div>
+
+              <div className="space-y-2 text-xs text-muted-foreground">
+                <div className="flex items-center justify-between"><span>Model</span><span className="text-foreground">{agent.model}</span></div>
+                <div className="flex items-center justify-between"><span>Voice</span><span className="text-foreground font-mono">{agent.voice}</span></div>
+                <div className="flex items-center justify-between"><span>Created</span><span className="text-foreground">{new Date(agent.created_at).toLocaleDateString()}</span></div>
+              </div>
+
               <div className="mt-6 pt-4 border-t border-border/50 flex justify-between items-center">
                 <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"><Play className="h-4 w-4" /></Button>
-                  {!agent.is_test && (
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
-                      onClick={async () => {
-                        if (!confirm("Are you sure you want to delete this agent?")) return;
-                        try {
-                          const { error } = await supabase.from("ai_agents").delete().eq("id", agent.id);
-                          if (error) throw error;
-                          toast.success("Agent deleted");
-                          loadAgents();
-                        } catch (err: any) {
-                          toast.error(err.message);
-                        }
-                      }}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"
+                    onClick={async () => {
+                      const nextStatus = agent.displayStatus === "running" ? "paused" : "running";
+                      const { error } = await supabase.from("ai_agents").update({ status: nextStatus }).eq("id", agent.id);
+                      if (error) toast.error(error.message);
+                      else {
+                        toast.success(`Agent ${nextStatus}`);
+                        loadAgents();
+                      }
+                    }}
+                  >
+                    {agent.displayStatus === "running" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
+                    onClick={async () => {
+                      if (!confirm("Are you sure you want to delete this agent?")) return;
+                      try {
+                        const { error } = await supabase.from("ai_agents").delete().eq("id", agent.id);
+                        if (error) throw error;
+                        toast.success("Agent deleted");
+                        loadAgents();
+                      } catch (err: any) {
+                        toast.error(err.message);
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
             </Card>
           ))}
+
           {displayedAgents.length === 0 && !isLoading && (
-             <div className="col-span-full py-12 text-center border-2 border-dashed border-border rounded-xl">
-                <Bot className="h-12 w-12 text-muted-foreground/20 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-foreground">No agents found</h3>
-                <p className="text-muted-foreground">Deploy your first AI agent to get started.</p>
-             </div>
+            <div className="col-span-full py-12 text-center border-2 border-dashed border-border rounded-xl">
+              <Bot className="h-12 w-12 text-muted-foreground/20 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-foreground">No agents found</h3>
+              <p className="text-muted-foreground">Deploy your first AI agent to get started.</p>
+            </div>
           )}
         </div>
       )}
-      
-      <AgentWizard 
-        open={wizardOpen} 
-        onClose={() => { setWizardOpen(false); loadAgents(); }} 
-        activePlugins={activePlugins} 
-        user={user}
-      />
+
+      <AgentWizard open={wizardOpen} onClose={() => { setWizardOpen(false); loadAgents(); }} activePlugins={activePlugins} user={user} />
       {testAgent && <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />}
     </div>
   );

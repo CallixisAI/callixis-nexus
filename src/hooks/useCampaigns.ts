@@ -19,6 +19,7 @@ export interface Campaign {
   maxQualifiedLeads: number;
   qualifiedLeadsSent: number;
   crmApiEndpoint: string;
+  budget: number;
 }
 
 export interface CallRecord {
@@ -62,7 +63,8 @@ function mapCampaignWithStats(row: CampaignRow, records: CallRecordRow[]): Campa
     workHours: (row.work_hours as any) || { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" },
     maxQualifiedLeads: row.max_qualified_leads,
     qualifiedLeadsSent: records.filter(r => r.is_qualified).length,
-    crmApiEndpoint: row.crm_api_endpoint || ""
+    crmApiEndpoint: row.crm_api_endpoint || "",
+    budget: Number(row.budget || 0)
   };
 }
 
@@ -151,7 +153,7 @@ export function useCampaigns() {
       if (updates.name) dbUpdates.name = updates.name;
       if (updates.industry) dbUpdates.industry = updates.industry;
       if (updates.budget !== undefined) dbUpdates.budget = updates.budget;
-      if (updates.maxQualifiedLeads !== undefined) dbUpdates.maxQualifiedLeads = updates.maxQualifiedLeads;
+      if (updates.maxQualifiedLeads !== undefined) dbUpdates.max_qualified_leads = updates.maxQualifiedLeads;
       if (updates.crmApiEndpoint !== undefined) dbUpdates.crm_api_endpoint = updates.crmApiEndpoint;
       if (updates.workHours) dbUpdates.work_hours = updates.workHours;
 

@@ -1,406 +1,509 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import {
-  Store, ShoppingCart, TrendingUp, Star, Search, Filter,
-  Users, Phone, DollarSign, BarChart3, Eye, Shield, Zap,
-  CheckCircle2, ArrowUpRight, Globe, Building2, Heart, Car,
-  Home, Landmark, PiggyBank, Plus,
+  Store,
+  ShoppingCart,
+  Search,
+  Filter,
+  Users,
+  BarChart3,
+  Plus,
+  Clock3,
+  Gavel,
+  ShieldCheck,
+  ArrowRightLeft,
+  TicketPercent,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
 
-type Offer = {
+type DealTerm = "CPL" | "CPA" | "CPA + CRG%";
+type DealStatus = "open" | "matched" | "expired" | "delivering" | "closed";
+type DeskOfferStatus = "leading" | "outbid" | "matched" | "pending" | "cancelled" | "rejected";
+
+type AffiliateDeal = {
   id: string;
   affiliateName: string;
-  title: string;
-  industry: string;
-  industryIcon: React.ElementType;
-  description: string;
-  pricePerLead: number;
+  affiliateUserId: string;
+  geo: string;
+  source: string;
+  funnel: string;
+  price: number;
+  terms: DealTerm;
   conversionRate: number;
-  totalLeads: number;
-  successRate: number;
-  avgCallDuration: string;
-  rating: number;
-  verified: boolean;
-  featured: boolean;
-  aiAgents: number;
-  activeCallers: number;
-  geo: string;
+  bidExpiryAt: string;
+  leadVolume: number;
+  notes: string;
+  status: DealStatus;
+  offersReceived: number;
+  bestDeskBid?: number;
+  myAsk: number;
 };
 
-const mockOffers: Offer[] = [
-  {
-    id: "1", affiliateName: "LeadGen Pro", title: "Premium Real Estate Leads", industry: "Real Estate", industryIcon: Home,
-    description: "High-intent homebuyer leads from AI-driven outbound campaigns targeting pre-qualified prospects in top US metros.",
-    pricePerLead: 45, conversionRate: 18.5, totalLeads: 12400, successRate: 92, avgCallDuration: "4:32",
-    rating: 4.8, verified: true, featured: true, aiAgents: 8, activeCallers: 24, geo: "US - Top 20 Metros",
-  },
-  {
-    id: "2", affiliateName: "MedConnect AI", title: "Medicare Enrollment Leads", industry: "Medical", industryIcon: Heart,
-    description: "Medicare-eligible seniors contacted via compliant AI agents. TCPA-compliant with warm transfers available.",
-    pricePerLead: 65, conversionRate: 22.1, totalLeads: 8900, successRate: 88, avgCallDuration: "5:15",
-    rating: 4.6, verified: true, featured: true, aiAgents: 12, activeCallers: 18, geo: "US Nationwide",
-  },
-  {
-    id: "3", affiliateName: "FinanceFirst", title: "Auto Insurance Leads", industry: "Insurance", industryIcon: Shield,
-    description: "AI-generated auto insurance leads with multi-carrier quoting intent. Real-time transfer capability.",
-    pricePerLead: 35, conversionRate: 15.3, totalLeads: 21000, successRate: 85, avgCallDuration: "3:48",
-    rating: 4.4, verified: true, featured: false, aiAgents: 6, activeCallers: 30, geo: "US - 48 States",
-  },
-  {
-    id: "4", affiliateName: "BankFlow", title: "Personal Loan Applications", industry: "Finance", industryIcon: Landmark,
-    description: "Pre-qualified personal loan applicants generated through AI outreach. Credit score 650+ verified.",
-    pricePerLead: 80, conversionRate: 12.8, totalLeads: 5600, successRate: 90, avgCallDuration: "6:02",
-    rating: 4.7, verified: true, featured: false, aiAgents: 4, activeCallers: 12, geo: "US Nationwide",
-  },
-  {
-    id: "5", affiliateName: "HomeImprov AI", title: "Home Renovation Leads", industry: "Home Improvement", industryIcon: Home,
-    description: "Homeowners interested in kitchen, bath, and roofing renovations. Geo-targeted to contractor service areas.",
-    pricePerLead: 28, conversionRate: 20.5, totalLeads: 15800, successRate: 87, avgCallDuration: "3:22",
-    rating: 4.3, verified: false, featured: false, aiAgents: 5, activeCallers: 16, geo: "US - Regional",
-  },
-  {
-    id: "6", affiliateName: "AutoDeal Network", title: "Car Buyer Leads", industry: "Car Sales", industryIcon: Car,
-    description: "In-market car buyers with make/model preference data. AI agents qualify budget and timeline.",
-    pricePerLead: 55, conversionRate: 16.9, totalLeads: 9200, successRate: 83, avgCallDuration: "4:10",
-    rating: 4.5, verified: true, featured: true, aiAgents: 7, activeCallers: 20, geo: "US - Major Markets",
-  },
-];
-
-const industries = ["All", "Real Estate", "Medical", "Insurance", "Finance", "Home Improvement", "Car Sales"];
-
-type BrandListing = {
+type DeskOffer = {
   id: string;
-  brandName: string;
-  title: string;
-  industry: string;
-  budgetPerLead: number;
-  monthlyVolume: number;
-  requirements: string;
-  geo: string;
-  status: "open" | "in-progress" | "filled";
+  dealId: string;
+  deskUserId: string;
+  deskName: string;
+  bidPrice: number;
+  quantity: number;
+  status: DeskOfferStatus;
+  reservedAmount: number;
 };
 
-const mockBrandListings: BrandListing[] = [
-  { id: "b1", brandName: "Sunrise Realty", title: "Looking for Homebuyer Leads in FL", industry: "Real Estate", budgetPerLead: 50, monthlyVolume: 500, requirements: "Pre-qualified, credit score 680+, looking to buy within 6 months", geo: "Florida", status: "open" },
-  { id: "b2", brandName: "SafeGuard Insurance", title: "Auto Insurance Live Transfers", industry: "Insurance", budgetPerLead: 40, monthlyVolume: 1000, requirements: "Real-time transfers only, multi-car households preferred", geo: "US Nationwide", status: "open" },
-  { id: "b3", brandName: "Premier Auto Group", title: "In-Market Car Buyers Needed", industry: "Car Sales", budgetPerLead: 60, monthlyVolume: 300, requirements: "Budget $25k+, ready to purchase within 30 days", geo: "Texas, California", status: "in-progress" },
-  { id: "b4", brandName: "MediCare Plus", title: "Medicare Supplement Enrollments", industry: "Medical", budgetPerLead: 75, monthlyVolume: 800, requirements: "Age 65+, T65 turning 65 in 90 days, AEP/OEP compliant", geo: "US Nationwide", status: "open" },
-];
+const termsOptions: DealTerm[] = ["CPL", "CPA", "CPA + CRG%"];
+const geoFilters = ["All", "US", "UK", "EU", "Canada", "Australia"];
+
+const formatCurrency = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+
+const getCountdown = (iso: string) => {
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff <= 0) return "Expired";
+  const totalMinutes = Math.floor(diff / 60000);
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+};
 
 const Marketplace = () => {
-  const navigate = useNavigate();
-  const [side, setSide] = useState<"affiliate" | "brand">("affiliate");
+  const { user, profile, role } = useAuth();
+  const [side, setSide] = useState<"affiliate" | "desk">("affiliate");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedIndustry, setSelectedIndustry] = useState("All");
-  const [selectedOffer, setSelectedOffer] = useState<Offer | null>(null);
-  const [buyDialog, setBuyDialog] = useState<Offer | null>(null);
-  const [buyQuantity, setBuyQuantity] = useState("10");
-  const walletBalance = 8500; // mock — would come from shared state/DB
-
-  const filteredOffers = mockOffers.filter((o) => {
-    const matchesSearch = o.title.toLowerCase().includes(searchQuery.toLowerCase()) || o.affiliateName.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesIndustry = selectedIndustry === "All" || o.industry === selectedIndustry;
-    return matchesSearch && matchesIndustry;
+  const [selectedGeo, setSelectedGeo] = useState("All");
+  const [affiliateDeals, setAffiliateDeals] = useState<AffiliateDeal[]>([]);
+  const [deskOffers, setDeskOffers] = useState<DeskOffer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bidDialog, setBidDialog] = useState<AffiliateDeal | null>(null);
+  const [newDealOpen, setNewDealOpen] = useState(false);
+  const [bidPrice, setBidPrice] = useState("");
+  const [bidQuantity, setBidQuantity] = useState("");
+  const [newDeal, setNewDeal] = useState({
+    geo: "",
+    source: "",
+    funnel: "",
+    price: "",
+    terms: "CPL" as DealTerm,
+    conversionRate: "",
+    bidExpiryHours: "24",
+    leadVolume: "",
+    notes: "",
   });
 
-  const filteredBrandListings = mockBrandListings.filter((l) => {
-    const matchesSearch = l.title.toLowerCase().includes(searchQuery.toLowerCase()) || l.brandName.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesIndustry = selectedIndustry === "All" || l.industry === selectedIndustry;
-    return matchesSearch && matchesIndustry;
+  useEffect(() => {
+    const loadMarketplace = async () => {
+      if (!user) return;
+      setLoading(true);
+      try {
+        const [{ data: dealsData, error: dealsError }, { data: offersData, error: offersError }, { data: profilesData }] = await Promise.all([
+          supabase.from("marketplace_deals").select("*").order("created_at", { ascending: false }),
+          supabase.from("marketplace_offers").select("*").order("created_at", { ascending: false }),
+          supabase.from("profiles").select("id, full_name, email"),
+        ]);
+
+        if (dealsError) throw dealsError;
+        if (offersError) throw offersError;
+
+        const profileById = new Map((profilesData || []).map((entry) => [entry.id, entry.full_name || entry.email || "User"]));
+        const offers = offersData || [];
+
+        const deals: AffiliateDeal[] = (dealsData || []).map((deal) => {
+          const relatedOffers = offers.filter((offer) => offer.deal_id === deal.id);
+          const bestDeskBid = relatedOffers.length > 0 ? Math.max(...relatedOffers.map((offer) => Number(offer.bid_price))) : undefined;
+          return {
+            id: deal.id,
+            affiliateName: profileById.get(deal.affiliate_user_id) || "Affiliate",
+            affiliateUserId: deal.affiliate_user_id,
+            geo: deal.geo,
+            source: deal.source,
+            funnel: deal.funnel,
+            price: Number(deal.price),
+            terms: deal.terms_type as DealTerm,
+            conversionRate: Number(deal.conversion_rate),
+            bidExpiryAt: deal.bid_expiry_at,
+            leadVolume: deal.lead_volume,
+            notes: deal.notes || "",
+            status: deal.status as DealStatus,
+            offersReceived: relatedOffers.length,
+            bestDeskBid,
+            myAsk: Number(deal.price),
+          };
+        });
+
+        const formattedOffers: DeskOffer[] = offers.map((offer) => ({
+          id: offer.id,
+          dealId: offer.deal_id,
+          deskUserId: offer.desk_user_id,
+          deskName: profileById.get(offer.desk_user_id) || "Desk",
+          bidPrice: Number(offer.bid_price),
+          quantity: offer.quantity,
+          status: offer.status as DeskOfferStatus,
+          reservedAmount: Number(offer.reserved_amount),
+        }));
+
+        setAffiliateDeals(deals);
+        setDeskOffers(formattedOffers);
+      } catch (err: any) {
+        toast.error(`Failed to load marketplace: ${err.message || "unknown error"}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadMarketplace();
+  }, [user]);
+
+  const filteredAffiliateDeals = affiliateDeals.filter((deal) => {
+    const matchesSearch = [deal.geo, deal.source, deal.funnel, deal.affiliateName].some((value) => value.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesGeo = selectedGeo === "All" || deal.geo.toLowerCase().includes(selectedGeo.toLowerCase());
+    return matchesSearch && matchesGeo;
   });
+
+  const matchedDeals = affiliateDeals.filter((deal) => deal.status === "matched" || deal.status === "delivering");
+  const openDeals = affiliateDeals.filter((deal) => deal.status === "open");
+  const reservedBalance = deskOffers.reduce((sum, offer) => sum + offer.reservedAmount, 0);
+
+  const createDeal = async () => {
+    if (!user) return;
+    if (!newDeal.geo || !newDeal.source || !newDeal.funnel || !newDeal.price || !newDeal.conversionRate || !newDeal.leadVolume) {
+      toast.error("Fill in the required deal fields first.");
+      return;
+    }
+
+    try {
+      const expiry = new Date(Date.now() + Number(newDeal.bidExpiryHours || 24) * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase.from("marketplace_deals").insert({
+        affiliate_user_id: user.id,
+        geo: newDeal.geo,
+        source: newDeal.source,
+        funnel: newDeal.funnel,
+        price: Number(newDeal.price),
+        terms_type: newDeal.terms,
+        conversion_rate: Number(newDeal.conversionRate),
+        bid_expiry_at: expiry,
+        lead_volume: Number(newDeal.leadVolume),
+        notes: newDeal.notes,
+        status: "open",
+      }).select().single();
+
+      if (error) throw error;
+
+      const created: AffiliateDeal = {
+        id: data.id,
+        affiliateName: profile?.full_name || profile?.email || "My Affiliate Desk",
+        affiliateUserId: user.id,
+        geo: data.geo,
+        source: data.source,
+        funnel: data.funnel,
+        price: Number(data.price),
+        terms: data.terms_type as DealTerm,
+        conversionRate: Number(data.conversion_rate),
+        bidExpiryAt: data.bid_expiry_at,
+        leadVolume: data.lead_volume,
+        notes: data.notes || "",
+        status: data.status as DealStatus,
+        offersReceived: 0,
+        myAsk: Number(data.price),
+      };
+
+      setAffiliateDeals((prev) => [created, ...prev]);
+      setNewDeal({ geo: "", source: "", funnel: "", price: "", terms: "CPL", conversionRate: "", bidExpiryHours: "24", leadVolume: "", notes: "" });
+      setNewDealOpen(false);
+      toast.success("Deal opened for bidding.");
+    } catch (err: any) {
+      toast.error(`Could not create deal: ${err.message || "unknown error"}`);
+    }
+  };
+
+  const placeDeskBid = async () => {
+    if (!user || !bidDialog) return;
+    if (!bidPrice || !bidQuantity || Number(bidPrice) <= 0 || Number(bidQuantity) <= 0) {
+      toast.error("Enter a valid bid price and quantity.");
+      return;
+    }
+
+    const offerValue = Number(bidPrice) * Number(bidQuantity);
+    const isMatch = Number(bidPrice) >= bidDialog.myAsk;
+
+    try {
+      const { data, error } = await supabase.from("marketplace_offers").insert({
+        deal_id: bidDialog.id,
+        desk_user_id: user.id,
+        bid_price: Number(bidPrice),
+        quantity: Number(bidQuantity),
+        status: isMatch ? "matched" : "leading",
+        reserved_amount: isMatch ? offerValue : 0,
+      }).select().single();
+
+      if (error) throw error;
+
+      if (isMatch) {
+        const { error: reservationError } = await supabase.from("marketplace_reservations").insert({
+          offer_id: data.id,
+          desk_user_id: user.id,
+          amount: offerValue,
+          status: "held",
+        });
+        if (reservationError) throw reservationError;
+
+        const { error: dealUpdateError } = await supabase.from("marketplace_deals").update({ status: "matched" }).eq("id", bidDialog.id);
+        if (dealUpdateError) throw dealUpdateError;
+      }
+
+      const createdOffer: DeskOffer = {
+        id: data.id,
+        dealId: data.deal_id,
+        deskUserId: data.desk_user_id,
+        deskName: profile?.full_name || profile?.email || "Desk",
+        bidPrice: Number(data.bid_price),
+        quantity: data.quantity,
+        status: data.status as DeskOfferStatus,
+        reservedAmount: Number(data.reserved_amount),
+      };
+
+      setDeskOffers((prev) => [createdOffer, ...prev]);
+      setAffiliateDeals((prev) => prev.map((deal) => deal.id === bidDialog.id ? {
+        ...deal,
+        offersReceived: deal.offersReceived + 1,
+        bestDeskBid: Math.max(deal.bestDeskBid || 0, Number(bidPrice)),
+        status: isMatch ? "matched" : deal.status,
+      } : deal));
+
+      toast.success(isMatch
+        ? `Bid matched. ${formatCurrency(offerValue)} moved into reserved offer balance.`
+        : "Bid submitted. Waiting for affiliate decision.");
+
+      setBidDialog(null);
+      setBidPrice("");
+      setBidQuantity("");
+    } catch (err: any) {
+      toast.error(`Could not place bid: ${err.message || "unknown error"}`);
+    }
+  };
+
+  if (loading) {
+    return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading marketplace auctions...</div>;
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">Marketplace</h1>
-          <p className="text-muted-foreground text-sm mt-1">Buy and sell AI-generated leads across industries</p>
+          <h1 className="text-2xl font-semibold text-foreground">Marketplace Auctions</h1>
+          <p className="text-muted-foreground text-sm mt-1">Bid-and-buy traffic marketplace for affiliate deals and desk offers.</p>
         </div>
-        <Button className="gap-2">
-          <Plus className="h-4 w-4" /> Create Listing
-        </Button>
+        {role === "affiliate" || role === "admin" ? (
+          <Dialog open={newDealOpen} onOpenChange={setNewDealOpen}>
+            <DialogTrigger asChild>
+              <Button className="gap-2"><Plus className="h-4 w-4" /> Add Deal</Button>
+            </DialogTrigger>
+            <DialogContent className="bg-card border-border max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Create Affiliate Deal</DialogTitle>
+                <DialogDescription>Create a real marketplace auction deal stored in Supabase.</DialogDescription>
+              </DialogHeader>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-2">
+                <div className="space-y-2"><Label>GEO</Label><Input value={newDeal.geo} onChange={(e) => setNewDeal({ ...newDeal, geo: e.target.value })} placeholder="US, UK, DE..." /></div>
+                <div className="space-y-2"><Label>Source</Label><Input value={newDeal.source} onChange={(e) => setNewDeal({ ...newDeal, source: e.target.value })} placeholder="Facebook, Search, Native..." /></div>
+                <div className="space-y-2"><Label>Funnel</Label><Input value={newDeal.funnel} onChange={(e) => setNewDeal({ ...newDeal, funnel: e.target.value })} placeholder="Mortgage quiz, form flow..." /></div>
+                <div className="space-y-2"><Label>Price</Label><Input type="number" value={newDeal.price} onChange={(e) => setNewDeal({ ...newDeal, price: e.target.value })} placeholder="Price per deal" /></div>
+                <div className="space-y-2"><Label>Terms</Label><Select value={newDeal.terms} onValueChange={(value) => setNewDeal({ ...newDeal, terms: value as DealTerm })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{termsOptions.map((term) => <SelectItem key={term} value={term}>{term}</SelectItem>)}</SelectContent></Select></div>
+                <div className="space-y-2"><Label>Conversion Rate %</Label><Input type="number" value={newDeal.conversionRate} onChange={(e) => setNewDeal({ ...newDeal, conversionRate: e.target.value })} placeholder="Expected conversion rate" /></div>
+                <div className="space-y-2"><Label>Bid Expiry (hours)</Label><Input type="number" value={newDeal.bidExpiryHours} onChange={(e) => setNewDeal({ ...newDeal, bidExpiryHours: e.target.value })} placeholder="24" /></div>
+                <div className="space-y-2"><Label>Leads To Sell</Label><Input type="number" value={newDeal.leadVolume} onChange={(e) => setNewDeal({ ...newDeal, leadVolume: e.target.value })} placeholder="Lead quantity" /></div>
+                <div className="md:col-span-2 space-y-2"><Label>Notes</Label><Textarea value={newDeal.notes} onChange={(e) => setNewDeal({ ...newDeal, notes: e.target.value })} placeholder="Example: invalid lead deductions, validation rules, timing conditions..." className="min-h-[100px]" /></div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setNewDealOpen(false)}>Cancel</Button>
+                <Button onClick={createDeal}>Open Auction</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        ) : null}
       </div>
 
-      {/* Side Switcher */}
-      <Tabs value={side} onValueChange={(v) => setSide(v as "affiliate" | "brand")}>
+      <Card className="bg-card border-border p-4 text-xs text-muted-foreground leading-relaxed">
+        Deal creation, desk offers, and reserved balance records now persist in the database. Lead delivery into Callixis AI and escrow release validation are the remaining backend steps.
+      </Card>
+
+      <Tabs value={side} onValueChange={(value) => setSide(value as "affiliate" | "desk")}>
         <TabsList className="bg-secondary">
-          <TabsTrigger value="affiliate" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-            <Store className="h-4 w-4" /> Affiliate Offers
-          </TabsTrigger>
-          <TabsTrigger value="brand" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-            <ShoppingCart className="h-4 w-4" /> Brand Requests
-          </TabsTrigger>
+          <TabsTrigger value="affiliate" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><Store className="h-4 w-4" /> Affiliate View</TabsTrigger>
+          <TabsTrigger value="desk" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"><ShoppingCart className="h-4 w-4" /> Desk View</TabsTrigger>
         </TabsList>
 
-        {/* Filters */}
-        <div className="flex items-center gap-3 mt-4">
+        <div className="flex items-center gap-3 mt-4 flex-wrap">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={side === "affiliate" ? "Search offers..." : "Search brand requests..."}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-card border-border"
-            />
+            <Input placeholder={side === "affiliate" ? "Search deals..." : "Search auctions..."} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 bg-card border-border" />
           </div>
-          <Select value={selectedIndustry} onValueChange={setSelectedIndustry}>
-            <SelectTrigger className="w-48 bg-card border-border">
-              <Filter className="h-4 w-4 mr-2 text-muted-foreground" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {industries.map((ind) => (
-                <SelectItem key={ind} value={ind}>{ind}</SelectItem>
-              ))}
-            </SelectContent>
+          <Select value={selectedGeo} onValueChange={setSelectedGeo}>
+            <SelectTrigger className="w-48 bg-card border-border"><Filter className="h-4 w-4 mr-2 text-muted-foreground" /><SelectValue /></SelectTrigger>
+            <SelectContent>{geoFilters.map((geo) => <SelectItem key={geo} value={geo}>{geo}</SelectItem>)}</SelectContent>
           </Select>
         </div>
 
-        {/* Affiliate Offers Tab */}
-        <TabsContent value="affiliate" className="mt-4">
-          {/* Stats Banner */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
+        <TabsContent value="affiliate" className="mt-4 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
-              { label: "Active Offers", value: mockOffers.length.toString(), icon: Store },
-              { label: "Total Leads Available", value: "72.9K", icon: Users },
-              { label: "Avg. Price/Lead", value: "$51.33", icon: DollarSign },
-              { label: "Avg. Conversion", value: "17.7%", icon: TrendingUp },
-            ].map((s) => (
-              <div key={s.label} className="bg-card border border-border rounded-lg p-4 glow-cyan">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-muted-foreground">{s.label}</span>
-                  <s.icon className="h-4 w-4 text-primary" />
-                </div>
-                <span className="text-xl font-semibold text-foreground">{s.value}</span>
+              { label: "Open Auctions", value: openDeals.length.toString(), icon: Gavel },
+              { label: "Matched Deals", value: matchedDeals.length.toString(), icon: CheckCircle2 },
+              { label: "Offers Received", value: affiliateDeals.reduce((sum, deal) => sum + deal.offersReceived, 0).toString(), icon: BarChart3 },
+              { label: "Lead Inventory", value: affiliateDeals.reduce((sum, deal) => sum + deal.leadVolume, 0).toLocaleString(), icon: Users },
+            ].map((stat) => (
+              <div key={stat.label} className="bg-card border border-border rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2"><span className="text-xs text-muted-foreground">{stat.label}</span><stat.icon className="h-4 w-4 text-primary" /></div>
+                <span className="text-xl font-semibold text-foreground">{stat.value}</span>
               </div>
             ))}
           </div>
 
-          {/* Offer Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {filteredOffers.map((offer) => (
-              <Card key={offer.id} className={`bg-card border-border hover:border-primary/40 transition-all cursor-pointer group ${offer.featured ? "ring-1 ring-primary/20" : ""}`}>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            {filteredAffiliateDeals.map((deal) => (
+              <Card key={deal.id} className="bg-card border-border hover:border-primary/40 transition-all">
                 <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="h-9 w-9 rounded-lg bg-secondary flex items-center justify-center">
-                        <offer.industryIcon className="h-5 w-5 text-primary" />
-                      </div>
-                      <div>
-                        <CardTitle className="text-sm font-semibold text-foreground">{offer.title}</CardTitle>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          {offer.affiliateName}
-                          {offer.verified && <CheckCircle2 className="h-3 w-3 text-primary" />}
-                        </p>
-                      </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">{deal.funnel}<Badge variant="outline" className="text-[10px]">{deal.terms}</Badge></CardTitle>
+                      <CardDescription className="text-xs mt-1">{deal.geo} · {deal.source} · {deal.affiliateName}</CardDescription>
                     </div>
-                    {offer.featured && <Badge className="bg-primary/10 text-primary border-primary/20 text-[10px]">Featured</Badge>}
+                    <Badge className={deal.status === "matched" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-primary/10 text-primary border-primary/20"}>{deal.status}</Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="pb-3 space-y-3">
-                  <p className="text-xs text-muted-foreground line-clamp-2">{offer.description}</p>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-secondary/50 rounded-md p-2">
-                      <span className="text-muted-foreground">Price/Lead</span>
-                      <p className="text-foreground font-semibold text-sm">${offer.pricePerLead}</p>
-                    </div>
-                    <div className="bg-secondary/50 rounded-md p-2">
-                      <span className="text-muted-foreground">Conversion</span>
-                      <p className="text-foreground font-semibold text-sm">{offer.conversionRate}%</p>
-                    </div>
-                    <div className="bg-secondary/50 rounded-md p-2">
-                      <span className="text-muted-foreground">Total Leads</span>
-                      <p className="text-foreground font-semibold text-sm">{offer.totalLeads.toLocaleString()}</p>
-                    </div>
-                    <div className="bg-secondary/50 rounded-md p-2">
-                      <span className="text-muted-foreground">Success Rate</span>
-                      <p className="text-foreground font-semibold text-sm">{offer.successRate}%</p>
-                    </div>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Affiliate Ask</span><p className="text-foreground font-semibold text-sm">{formatCurrency(deal.myAsk)}</p></div>
+                    <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Best Desk Bid</span><p className="text-foreground font-semibold text-sm">{deal.bestDeskBid ? formatCurrency(deal.bestDeskBid) : "No bids yet"}</p></div>
+                    <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Lead Volume</span><p className="text-foreground font-semibold text-sm">{deal.leadVolume}</p></div>
+                    <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Conversion Rate</span><p className="text-foreground font-semibold text-sm">{deal.conversionRate}%</p></div>
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><Zap className="h-3 w-3" />{offer.aiAgents} AI Agents</span>
-                    <span className="flex items-center gap-1"><Globe className="h-3 w-3" />{offer.geo}</span>
+                    <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" /> Ends in {getCountdown(deal.bidExpiryAt)}</span>
+                    <span className="flex items-center gap-1"><Gavel className="h-3 w-3" /> {deal.offersReceived} offers</span>
                   </div>
 
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Star key={i} className={`h-3 w-3 ${i < Math.floor(offer.rating) ? "text-primary fill-primary" : "text-muted-foreground/30"}`} />
-                    ))}
-                    <span className="text-xs text-muted-foreground ml-1">{offer.rating}</span>
+                  <div className="rounded-lg bg-secondary/30 border border-border p-3">
+                    <div className="flex items-center gap-2 mb-2"><FileText className="h-3.5 w-3.5 text-primary" /><span className="text-xs font-medium text-foreground">Affiliate Notes</span></div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{deal.notes}</p>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <span className={deal.bestDeskBid && deal.bestDeskBid >= deal.myAsk ? "text-emerald-400" : "text-amber-400"}>
+                      {deal.bestDeskBid && deal.bestDeskBid >= deal.myAsk ? "Match reached. Ready for lead delivery." : "Monitoring desk offers."}
+                    </span>
+                    <Button size="sm" variant="outline" className="text-xs">View Offers</Button>
                   </div>
                 </CardContent>
-                <CardFooter className="pt-0 gap-2">
-                  <Dialog>
-                    <DialogTrigger asChild>
-                      <Button size="sm" variant="outline" className="flex-1 text-xs" onClick={() => setSelectedOffer(offer)}>
-                        <Eye className="h-3 w-3 mr-1" /> Details
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent className="bg-card border-border max-w-lg">
-                      <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2 text-foreground">
-                          <offer.industryIcon className="h-5 w-5 text-primary" />
-                          {offer.title}
-                        </DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-4">
-                        <p className="text-sm text-muted-foreground">{offer.description}</p>
-                        <div className="grid grid-cols-2 gap-3">
-                          {[
-                            { l: "Price per Lead", v: `$${offer.pricePerLead}` },
-                            { l: "Conversion Rate", v: `${offer.conversionRate}%` },
-                            { l: "Total Leads Generated", v: offer.totalLeads.toLocaleString() },
-                            { l: "Success Rate", v: `${offer.successRate}%` },
-                            { l: "AI Agents Active", v: offer.aiAgents.toString() },
-                            { l: "Active Callers", v: offer.activeCallers.toString() },
-                            { l: "Avg Call Duration", v: offer.avgCallDuration },
-                            { l: "Geography", v: offer.geo },
-                          ].map((item) => (
-                            <div key={item.l} className="bg-secondary/50 rounded-md p-3">
-                              <span className="text-xs text-muted-foreground">{item.l}</span>
-                              <p className="text-sm font-semibold text-foreground">{item.v}</p>
-                            </div>
-                          ))}
-                        </div>
-                        <div>
-                          <span className="text-xs text-muted-foreground">Performance</span>
-                          <Progress value={offer.successRate} className="mt-1 h-2" />
-                        </div>
-                      </div>
-                      <DialogFooter>
-                        <Button className="w-full gap-2" onClick={() => { setBuyDialog(offer); }}>
-                          <ShoppingCart className="h-4 w-4" /> Purchase Leads
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                  <Button size="sm" className="flex-1 text-xs gap-1" onClick={() => setBuyDialog(offer)}>
-                    <ShoppingCart className="h-3 w-3" /> Buy Leads
-                  </Button>
-                </CardFooter>
               </Card>
             ))}
           </div>
         </TabsContent>
 
-        {/* Brand Requests Tab */}
-        <TabsContent value="brand" className="mt-4">
-          <div className="grid grid-cols-4 gap-4 mb-6">
+        <TabsContent value="desk" className="mt-4 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
-              { label: "Open Requests", value: mockBrandListings.filter((l) => l.status === "open").length.toString(), icon: ShoppingCart },
-              { label: "Total Monthly Volume", value: "2,600", icon: BarChart3 },
-              { label: "Avg. Budget/Lead", value: "$56.25", icon: DollarSign },
-              { label: "Active Brands", value: mockBrandListings.length.toString(), icon: Building2 },
-            ].map((s) => (
-              <div key={s.label} className="bg-card border border-border rounded-lg p-4 glow-cyan">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-muted-foreground">{s.label}</span>
-                  <s.icon className="h-4 w-4 text-primary" />
-                </div>
-                <span className="text-xl font-semibold text-foreground">{s.value}</span>
+              { label: "Open Auctions", value: filteredAffiliateDeals.filter((deal) => deal.status === "open").length.toString(), icon: Gavel },
+              { label: "My Offers", value: deskOffers.filter((offer) => offer.deskUserId === user?.id).length.toString(), icon: TicketPercent },
+              { label: "Reserved Balance", value: formatCurrency(reservedBalance), icon: ShieldCheck },
+              { label: "Matched Volume", value: deskOffers.filter((offer) => offer.status === "matched").reduce((sum, offer) => sum + offer.quantity, 0).toString(), icon: ArrowRightLeft },
+            ].map((stat) => (
+              <div key={stat.label} className="bg-card border border-border rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2"><span className="text-xs text-muted-foreground">{stat.label}</span><stat.icon className="h-4 w-4 text-primary" /></div>
+                <span className="text-xl font-semibold text-foreground">{stat.value}</span>
               </div>
             ))}
           </div>
 
           <div className="space-y-4">
-            {filteredBrandListings.map((listing) => (
-              <Card key={listing.id} className="bg-card border-border hover:border-primary/30 transition-colors">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-foreground">{listing.title}</h3>
-                        <Badge variant={listing.status === "open" ? "default" : "secondary"} className={listing.status === "open" ? "bg-primary/10 text-primary border-primary/20" : ""}>
-                          {listing.status === "open" ? "Open" : listing.status === "in-progress" ? "In Progress" : "Filled"}
-                        </Badge>
+            {filteredAffiliateDeals.map((deal) => {
+              const myOffer = deskOffers.find((offer) => offer.dealId === deal.id && offer.deskUserId === user?.id);
+              return (
+                <Card key={deal.id} className="bg-card border-border hover:border-primary/30 transition-colors">
+                  <CardContent className="p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 space-y-4">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <h3 className="font-semibold text-foreground">{deal.funnel}</h3>
+                          <Badge variant="outline" className="text-[10px]">{deal.terms}</Badge>
+                          <Badge className={deal.status === "matched" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-primary/10 text-primary border-primary/20"}>{deal.status}</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{deal.affiliateName} · {deal.geo} · {deal.source}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                          <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Affiliate Ask</span><p className="text-foreground font-semibold text-sm">{formatCurrency(deal.myAsk)}</p></div>
+                          <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Current Desk Bid</span><p className="text-foreground font-semibold text-sm">{deal.bestDeskBid ? formatCurrency(deal.bestDeskBid) : "—"}</p></div>
+                          <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Traffic Wanted</span><p className="text-foreground font-semibold text-sm">{deal.leadVolume}</p></div>
+                          <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Countdown</span><p className="text-foreground font-semibold text-sm">{getCountdown(deal.bidExpiryAt)}</p></div>
+                          <div className="bg-secondary/50 rounded-md p-3"><span className="text-muted-foreground">Spread</span><p className="text-foreground font-semibold text-sm">{formatCurrency(Math.max(0, deal.myAsk - (deal.bestDeskBid || 0)))}</p></div>
+                        </div>
+                        <div className="rounded-lg bg-secondary/30 border border-border p-3">
+                          <div className="flex items-center gap-2 mb-2"><AlertCircle className="h-3.5 w-3.5 text-primary" /><span className="text-xs font-medium text-foreground">Deal Notes</span></div>
+                          <p className="text-xs text-muted-foreground leading-relaxed">{deal.notes}</p>
+                        </div>
+                        {myOffer && (
+                          <div className="flex items-center justify-between text-xs rounded-lg border border-border p-3 bg-background/40">
+                            <span className="text-muted-foreground">My offer: {formatCurrency(myOffer.bidPrice)} x {myOffer.quantity}</span>
+                            <span className={myOffer.status === "matched" ? "text-emerald-400" : "text-amber-400"}>{myOffer.status === "matched" ? `Reserved ${formatCurrency(myOffer.reservedAmount)}` : myOffer.status}</span>
+                          </div>
+                        )}
                       </div>
-                      <p className="text-sm text-muted-foreground mb-3">
-                        <span className="font-medium text-foreground">{listing.brandName}</span> · {listing.industry} · {listing.geo}
-                      </p>
-                      <p className="text-xs text-muted-foreground mb-3">{listing.requirements}</p>
-                      <div className="flex items-center gap-6 text-sm">
-                        <span className="text-muted-foreground">Budget: <span className="text-foreground font-semibold">${listing.budgetPerLead}/lead</span></span>
-                        <span className="text-muted-foreground">Volume: <span className="text-foreground font-semibold">{listing.monthlyVolume.toLocaleString()}/mo</span></span>
-                      </div>
+                      {(role === "brand" || role === "admin") && (
+                        <Button className="gap-2 shrink-0" onClick={() => {
+                          setBidDialog(deal);
+                          setBidPrice(myOffer ? String(myOffer.bidPrice) : "");
+                          setBidQuantity(myOffer ? String(myOffer.quantity) : "");
+                        }}>
+                          <Gavel className="h-4 w-4" /> Place Offer
+                        </Button>
+                      )}
                     </div>
-                    <Button className="gap-2 shrink-0">
-                      <ArrowUpRight className="h-4 w-4" /> Apply as Affiliate
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* Buy Leads Dialog */}
-      <Dialog open={!!buyDialog} onOpenChange={(o) => !o && setBuyDialog(null)}>
+      <Dialog open={!!bidDialog} onOpenChange={(open) => !open && setBidDialog(null)}>
         <DialogContent className="bg-card border-border max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-foreground flex items-center gap-2">
-              <ShoppingCart className="h-5 w-5 text-primary" /> Purchase Leads
-            </DialogTitle>
+            <DialogTitle className="text-foreground flex items-center gap-2"><Gavel className="h-5 w-5 text-primary" /> Submit Desk Offer</DialogTitle>
+            <DialogDescription>If your bid matches the affiliate ask, the value moves into reserved offer balance until lead delivery is validated.</DialogDescription>
           </DialogHeader>
-          {buyDialog && (
+          {bidDialog && (
             <div className="space-y-4">
               <div className="bg-secondary/50 rounded-lg p-4 space-y-2">
-                <p className="text-sm font-medium text-foreground">{buyDialog.title}</p>
-                <p className="text-xs text-muted-foreground">{buyDialog.affiliateName} · {buyDialog.geo}</p>
+                <p className="text-sm font-medium text-foreground">{bidDialog.funnel}</p>
+                <p className="text-xs text-muted-foreground">{bidDialog.affiliateName} · {bidDialog.geo}</p>
               </div>
-              <div className="space-y-2">
-                <Label className="text-sm text-muted-foreground">Quantity</Label>
-                <Input type="number" min="1" value={buyQuantity} onChange={(e) => setBuyQuantity(e.target.value)} className="bg-secondary border-border" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2"><Label>Desk Bid Price</Label><Input type="number" value={bidPrice} onChange={(e) => setBidPrice(e.target.value)} /></div>
+                <div className="space-y-2"><Label>Traffic Quantity</Label><Input type="number" value={bidQuantity} onChange={(e) => setBidQuantity(e.target.value)} /></div>
               </div>
               <div className="bg-secondary/50 rounded-lg p-4 space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Price per lead</span>
-                  <span className="text-foreground">${buyDialog.pricePerLead}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Quantity</span>
-                  <span className="text-foreground">{buyQuantity}</span>
-                </div>
-                <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
-                  <span className="text-foreground">Total</span>
-                  <span className="text-primary">${(buyDialog.pricePerLead * Number(buyQuantity || 0)).toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Wallet Balance</span>
-                  <span className={walletBalance >= buyDialog.pricePerLead * Number(buyQuantity || 0) ? "text-emerald-400" : "text-destructive"}>
-                    ${walletBalance.toLocaleString()}
-                  </span>
-                </div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Affiliate Ask</span><span className="text-foreground">{formatCurrency(bidDialog.myAsk)}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">My Bid</span><span className="text-foreground">{bidPrice ? formatCurrency(Number(bidPrice)) : "—"}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Quantity</span><span className="text-foreground">{bidQuantity || "—"}</span></div>
+                <div className="border-t border-border pt-2 flex justify-between text-sm font-bold"><span className="text-foreground">Potential Reservation</span><span className="text-primary">{formatCurrency(Number(bidPrice || 0) * Number(bidQuantity || 0))}</span></div>
               </div>
-              {walletBalance < buyDialog.pricePerLead * Number(buyQuantity || 0) && (
-                <p className="text-xs text-destructive">Insufficient balance. <button onClick={() => navigate("/finance")} className="text-primary hover:underline">Add funds →</button></p>
-              )}
               <DialogFooter className="gap-2">
-                <Button variant="outline" onClick={() => setBuyDialog(null)}>Cancel</Button>
-                <Button
-                  disabled={walletBalance < buyDialog.pricePerLead * Number(buyQuantity || 0) || Number(buyQuantity) <= 0}
-                  onClick={() => {
-                    const total = buyDialog.pricePerLead * Number(buyQuantity);
-                    toast.success(`Purchased ${buyQuantity} leads for $${total.toLocaleString()}. Transaction recorded in Finance.`);
-                    setBuyDialog(null);
-                  }}
-                  className="glow-cyan"
-                >
-                  Confirm Purchase
-                </Button>
+                <Button variant="outline" onClick={() => setBidDialog(null)}>Cancel</Button>
+                <Button onClick={placeDeskBid}>Submit Offer</Button>
               </DialogFooter>
             </div>
           )}

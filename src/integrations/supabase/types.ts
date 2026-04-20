@@ -198,6 +198,168 @@ export type Database = {
         }
         Relationships: []
       }
+      marketplace_deals: {
+        Row: {
+          affiliate_user_id: string
+          bid_expiry_at: string
+          conversion_rate: number
+          created_at: string
+          funnel: string
+          geo: string
+          id: string
+          lead_volume: number
+          notes: string | null
+          price: number
+          source: string
+          status: string
+          terms_type: string
+          updated_at: string
+        }
+        Insert: {
+          affiliate_user_id: string
+          bid_expiry_at: string
+          conversion_rate?: number
+          created_at?: string
+          funnel: string
+          geo: string
+          id?: string
+          lead_volume?: number
+          notes?: string | null
+          price?: number
+          source: string
+          status?: string
+          terms_type: string
+          updated_at?: string
+        }
+        Update: {
+          affiliate_user_id?: string
+          bid_expiry_at?: string
+          conversion_rate?: number
+          created_at?: string
+          funnel?: string
+          geo?: string
+          id?: string
+          lead_volume?: number
+          notes?: string | null
+          price?: number
+          source?: string
+          status?: string
+          terms_type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      marketplace_offers: {
+        Row: {
+          bid_price: number
+          created_at: string
+          deal_id: string
+          desk_user_id: string
+          id: string
+          quantity: number
+          reserved_amount: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          bid_price?: number
+          created_at?: string
+          deal_id: string
+          desk_user_id: string
+          id?: string
+          quantity?: number
+          reserved_amount?: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          bid_price?: number
+          created_at?: string
+          deal_id?: string
+          desk_user_id?: string
+          id?: string
+          quantity?: number
+          reserved_amount?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      marketplace_reservations: {
+        Row: {
+          amount: number
+          created_at: string
+          desk_user_id: string
+          id: string
+          offer_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          amount?: number
+          created_at?: string
+          desk_user_id: string
+          id?: string
+          offer_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          desk_user_id?: string
+          id?: string
+          offer_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      marketplace_deliveries: {
+        Row: {
+          accepted_leads: number
+          affiliate_user_id: string
+          created_at: string
+          deal_id: string
+          delivered_leads: number
+          desk_user_id: string
+          id: string
+          notes: string | null
+          offer_id: string | null
+          rejected_leads: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_leads?: number
+          affiliate_user_id: string
+          created_at?: string
+          deal_id: string
+          delivered_leads?: number
+          desk_user_id: string
+          id?: string
+          notes?: string | null
+          offer_id?: string | null
+          rejected_leads?: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_leads?: number
+          affiliate_user_id?: string
+          created_at?: string
+          deal_id?: string
+          delivered_leads?: number
+          desk_user_id?: string
+          id?: string
+          notes?: string | null
+          offer_id?: string | null
+          rejected_leads?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
