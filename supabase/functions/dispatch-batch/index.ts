@@ -8,13 +8,24 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 // Four actions behind one function, selected by ?action= :
 //   GET  ?action=due    -> which leads are safe to dial right now, already clamped to the number
 //                          of free Vapi concurrency slots. n8n does not compute eligibility itself.
+//                          Reserve-before-dial (call-reliability plan §4, D-1): every lead this
+//                          returns has ALREADY been flipped to call_status='dialing' via
+//                          reserve_leads() (20260904000000_reserve_before_dial.sql) before this
+//                          response is even sent - not after Place Call (Vapi) succeeds. This is
+//                          what makes double-dialling structurally impossible: a lead can only be
+//                          selected once, ever, per reservation, regardless of how many times the
+//                          dispatcher wakes while a call is still in flight.
 //   POST ?action=claim  -> { claims: [{lead_id, vapi_call_id}], failures: [{lead_id, reason}] }
-//                          marks leads 'dialing' (a real call is now in flight) or reschedules ones
-//                          Vapi's API itself rejected (our error, not the lead's - see PHASE-4
-//                          checklist F.4, doesn't count against retry_count).
+//                          the lead is already 'dialing' by this point (see above) - claim only
+//                          attaches the real active_call_id once Vapi returns one; failures UNDO
+//                          the reservation (back to 'pending', retry_count decremented) since our
+//                          own API error means no call was actually placed (checklist F.4,
+//                          doesn't count against retry_count).
 //   POST ?action=sweep  -> resets leads stuck in 'dialing' for >30min back to 'pending'. Without
 //                          this a dropped end-of-call webhook leaks a concurrency slot forever
-//                          (checklist E.4 - "the most likely production failure").
+//                          (checklist E.4 - "the most likely production failure"). Also the
+//                          backstop for a reservation whose Place Call/claim never completed at
+//                          all (call-reliability plan §4 E.6).
 //   GET  ?action=health -> event-driven Phase 5 §A, the dead-man's switch. Reuses Phase 3's
 //                          has_due_leads() (supabase/migrations/20260819000000_dispatch_clock.sql)
 //                          for "is there work waiting", and MAX(leads.last_called_at) for "did a
@@ -25,7 +36,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 //
 // NOT live: needs the 20260803000000_dispatcher.sql migration applied, this function deployed,
 // and DISPATCH_SECRET set - see n8n-workflows/noxatech-v2.json's Sticky Note5 for the n8n-side
-// setup this depends on.
+// setup this depends on. Reserve-before-dial additionally needs 20260904000000_reserve_before_dial.sql
+// applied - see docs/call-reliability-plan/README.md §4 / Plan-Checklist/call-reliability/CHECKLIST.md.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -181,8 +193,27 @@ serve(async (req) => {
         selected.push(lead)
       }
 
+      // E.2/E.3 (call-reliability plan §4, D-1) — reserve every selected lead atomically BEFORE
+      // returning it to n8n, not after Place Call (Vapi) succeeds. This is the change that fixed
+      // the 2026-09-03 incident: once reserve_leads() flips a lead to call_status='dialing', this
+      // same handler's own `.eq('call_status', 'pending')` filter above excludes it from every
+      // future candidate pool - a second dispatcher wake, even one already in flight when this
+      // request started, cannot select it again. Only rows reserve_leads() actually flipped are
+      // returned; anything it lost to a concurrent reservation is silently dropped here rather
+      // than being handed out twice.
+      const selectedIds = selected.map((l) => l.id as string)
+      let reservedIds = new Set<string>()
+      if (selectedIds.length > 0) {
+        const { data: reserved, error: reserveError } = await supabase.rpc('reserve_leads', {
+          p_lead_ids: selectedIds,
+        })
+        if (reserveError) return jsonError(500, 'failed to reserve leads', reserveError.message)
+        reservedIds = new Set(((reserved ?? []) as Array<{ id: string }>).map((r) => r.id))
+      }
+      const reservedLeads = selected.filter((l) => reservedIds.has(l.id as string))
+
       return jsonOk({
-        leads: selected.map((l) => ({
+        leads: reservedLeads.map((l) => ({
           lead_id: l.id,
           user_id: l.user_id,
           campaign_id: l.campaign_id,
@@ -206,18 +237,14 @@ serve(async (req) => {
         const leadId = c.lead_id
         if (typeof leadId !== 'string' || !leadId) continue
         const vapiCallId = typeof c.vapi_call_id === 'string' ? c.vapi_call_id : null
-        // E.1 - this is what stops the next run, two minutes later, dialling the same person
-        // again. retry_count is fetched-then-incremented rather than done in SQL because
-        // PostgREST's .update() can't express `retry_count = retry_count + 1` directly.
-        const { data: existing } = await supabase.from('leads').select('retry_count').eq('id', leadId).single()
+        // E.4 (call-reliability plan §4, D-1) - the lead is ALREADY 'dialing' with retry_count
+        // already incremented and last_called_at already set, by reserve_leads() at ?action=due
+        // time, before Place Call (Vapi) was ever attempted. Writing those fields again here
+        // would double-count every attempt - the same bug call-engine Phase 4 §E.2 already fixed
+        // once in call-ingest. This step only attaches the real Vapi call id.
         const { error } = await supabase
           .from('leads')
-          .update({
-            call_status: 'dialing',
-            last_called_at: new Date().toISOString(),
-            active_call_id: vapiCallId,
-            retry_count: (existing?.retry_count ?? 0) + 1,
-          })
+          .update({ active_call_id: vapiCallId })
           .eq('id', leadId)
         if (!error) claimed++
       }
@@ -226,13 +253,21 @@ serve(async (req) => {
       for (const f of failures) {
         const leadId = f.lead_id
         if (typeof leadId !== 'string' || !leadId) continue
-        // F.4 - our own error, not the lead's. Retry soon, and retry_count is deliberately left
-        // untouched so this doesn't count toward the 3-attempt cap.
+        // E.5 (call-reliability plan §4, D-1) - the lead was already reserved by ?action=due
+        // before Place Call (Vapi) was ever attempted, so a Vapi-side API error must UNDO that
+        // reservation rather than merely reschedule it: put it back to 'pending' so a future wake
+        // can pick it up, and decrement retry_count so this doesn't count toward the lead's
+        // 3-attempt cap - it's our own error, not the lead's (preserves F.4's original intent).
+        // retry_count is fetched-then-decremented, same PostgREST limitation reserve_leads()'s SQL
+        // exists to avoid on the happy path - this is the unwind of a reservation that already
+        // happened, not a second race-prone read-modify-write of a live counter.
+        const { data: existing } = await supabase.from('leads').select('retry_count').eq('id', leadId).single()
         const { error } = await supabase
           .from('leads')
           .update({
             call_status: 'pending',
             next_call_at: new Date(Date.now() + FAILURE_RETRY_MINUTES * 60_000).toISOString(),
+            retry_count: Math.max(0, (existing?.retry_count ?? 1) - 1),
           })
           .eq('id', leadId)
         if (!error) failed++
@@ -272,6 +307,17 @@ serve(async (req) => {
     }
 
     if (req.method === 'POST' && action === 'sweep') {
+      // E.6 (call-reliability plan §4) - deliberately unchanged. reserve_leads() now sets
+      // last_called_at at RESERVATION time (before Place Call (Vapi) even runs) rather than at
+      // claim time, so this sweep already covers "reserved but never actually dialled" - e.g.
+      // ?action=claim's own request to Supabase failing after Place Call succeeded - with no
+      // further change needed here.
+      // Accepted, documented limitation: a lead rescued by this sweep keeps the retry_count
+      // reserve_leads() already incremented at reservation time - unlike the failures branch
+      // above (which knows for certain no call was placed at all), the sweep cannot tell "call
+      // placed, still genuinely in progress past 30 minutes" apart from "reservation abandoned,
+      // no call ever happened". Fixing this properly needs a separate reserved_at column;
+      // deliberately out of scope here. Fails safe - under-calling a lead, never over-calling one.
       const threshold = new Date(Date.now() - STUCK_CALL_MINUTES * 60_000).toISOString()
       const { data, error } = await supabase
         .from('leads')
