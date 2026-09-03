@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
   Phone,
   Mail,
@@ -22,7 +23,6 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-  DialogClose,
 } from "@/components/ui/dialog";
 import {
   Sheet,
@@ -35,6 +35,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import type { Database } from "@/integrations/supabase/types";
+
+type PluginRow = Database["public"]["Tables"]["user_plugins"]["Row"];
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 type PluginStatus = "active" | "available" | "inactive";
 
@@ -51,7 +55,7 @@ interface Plugin {
   name: string;
   description: string;
   longDescription: string;
-  icon: any;
+  icon: LucideIcon;
   status: PluginStatus;
   provider: string;
   features: string[];
@@ -69,14 +73,14 @@ const pluginRegistry: Plugin[] = [
     id: "n8n",
     name: "n8n Automation",
     description: "Connect workflow automation and webhook orchestration.",
-    longDescription: "Use n8n as the workflow brain for CRM updates, background jobs, and external integrations.",
+    longDescription: "Use n8n as the workflow brain for the Chat Test and script generator. Point this at your workflow's /chat webhook door specifically — not the /vapi-events or /transcript doors, which are for call outcomes, not chat replies.",
     icon: Workflow,
     status: "available",
     provider: "n8n.io",
     features: ["Workflow orchestration", "Webhook integration", "CRM sync"],
     category: "Automation",
     configFields: [
-      { key: "webhookUrl", label: "Production Webhook URL", placeholder: "https://n8n.yourdomain.com/webhook/...", type: "url", required: true },
+      { key: "webhookUrl", label: "Chat Webhook URL", placeholder: "https://n8n.yourdomain.com/webhook/chat", type: "url", required: true },
       { key: "apiKey", label: "n8n API Key", placeholder: "Your n8n API key", type: "password", required: false },
     ],
   },
@@ -134,7 +138,13 @@ const statusStyles: Record<PluginStatus, string> = {
   inactive: "bg-destructive/10 text-destructive border-destructive/20",
 };
 
-async function streamChat({ messages, pluginId, onDelta, onDone, onError }: any) {
+async function streamChat({ messages, pluginId, onDelta, onDone, onError }: {
+  messages: ChatMessage[];
+  pluginId: string;
+  onDelta: (chunk: string) => void;
+  onDone: () => void;
+  onError: (msg: string) => void;
+}) {
   try {
     const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/plugin-setup-chat`, {
       method: "POST",
@@ -181,8 +191,8 @@ const IntegrationSheet = ({
   plugin: Plugin | null;
   open: boolean;
   onOpenChange: (o: boolean) => void;
-  onConfigSaved: (pluginId: string, config: any) => void;
-  initialConfig?: any;
+  onConfigSaved: (pluginId: string, config: Record<string, string>) => void;
+  initialConfig?: Record<string, string>;
 }) => {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -320,14 +330,16 @@ const PluginCard = ({
   onActivate,
   onDeactivate,
   onSetup,
-  isAdmin,
+  canManage,
 }: {
   plugin: Plugin;
   isConfigured: boolean;
   onActivate: (p: Plugin) => void;
   onDeactivate: (p: Plugin) => void;
   onSetup: (p: Plugin) => void;
-  isAdmin: boolean;
+  // Phase 2 §E/[E24]: was `isAdmin`. Gated on the `plugins` permission now, not the admin
+  // role — see the Plugins() component below for why.
+  canManage: boolean;
 }) => {
   const Icon = plugin.icon;
   const isActive = plugin.status === "active";
@@ -357,8 +369,8 @@ const PluginCard = ({
             <div className="flex items-center justify-between mt-4">
               <p className="text-xs text-muted-foreground">Provider: <span className="text-foreground">{plugin.provider}</span></p>
               <div className="flex gap-2">
-                {isAdmin && <Button variant="outline" size="sm" className="h-8 text-xs border-border bg-secondary/50" onClick={() => onSetup(plugin)}><Settings className="h-3 w-3 mr-1" /> Config</Button>}
-                {isAdmin && (isActive ? <Button variant="outline" size="sm" className="h-8 text-xs border-destructive/20 text-destructive hover:bg-destructive/10" onClick={() => onDeactivate(plugin)}>Disable</Button> : <Button size="sm" className="h-8 text-xs glow-cyan" onClick={() => onActivate(plugin)}>Enable</Button>)}
+                {canManage && <Button variant="outline" size="sm" className="h-8 text-xs border-border bg-secondary/50" onClick={() => onSetup(plugin)}><Settings className="h-3 w-3 mr-1" /> Config</Button>}
+                {canManage && (isActive ? <Button variant="outline" size="sm" className="h-8 text-xs border-destructive/20 text-destructive hover:bg-destructive/10" onClick={() => onDeactivate(plugin)}>Disable</Button> : <Button size="sm" className="h-8 text-xs glow-cyan" onClick={() => onActivate(plugin)}>Enable</Button>)}
               </div>
             </div>
           </div>
@@ -369,9 +381,17 @@ const PluginCard = ({
 };
 
 const Plugins = () => {
-  const { role, user } = useAuth();
-  const isAdmin = role?.toLowerCase() === "admin";
-  const [dbPlugins, setDbPlugins] = useState<any[]>([]);
+  const { user, hasPermission } = useAuth();
+  // Phase 2 (docs/admin-module-plan/PHASE-2-app-reads-roles.md §E/[E24]) — was gated on
+  // `isAdmin`, but `user_plugins` is strictly per-user (UNIQUE(user_id, plugin_id), own-row
+  // RLS, fetched with .eq("user_id", user.id) below): an admin pressing Config only ever
+  // edited *their own* row, and the user who actually owns the row that matters — the n8n
+  // webhook URL, "the entire integration" per this repo's CLAUDE.md — had no way to set it.
+  // §E's decision: gate on the `plugins` permission instead, which Phase 1 §7.5 already
+  // grants to every role (James, 2026-08-12: "everyone can see it"), so this stops being an
+  // admin-only feature without needing a data-model change.
+  const canManagePlugins = hasPermission("plugins");
+  const [dbPlugins, setDbPlugins] = useState<PluginRow[]>([]);
   const [activateTarget, setActivateTarget] = useState<Plugin | null>(null);
   const [setupTarget, setSetupTarget] = useState<Plugin | null>(null);
 
@@ -381,8 +401,8 @@ const Plugins = () => {
       const { data, error } = await supabase.from("user_plugins").select("*").eq("user_id", user.id);
       if (error) throw error;
       setDbPlugins(data || []);
-    } catch (err: any) {
-      toast.error(err.message || "Failed to load plugins.");
+    } catch (err) {
+      toast.error(errorMessage(err) || "Failed to load plugins.");
     }
   }, [user]);
 
@@ -398,8 +418,8 @@ const Plugins = () => {
       toast.success("Plugin marked active.");
       setActivateTarget(null);
       fetchPlugins();
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err) {
+      toast.error(errorMessage(err));
     }
   };
 
@@ -410,12 +430,12 @@ const Plugins = () => {
       if (error) throw error;
       toast.success("Plugin disabled.");
       fetchPlugins();
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err) {
+      toast.error(errorMessage(err));
     }
   };
 
-  const handleSaveConfig = async (id: string, config: any) => {
+  const handleSaveConfig = async (id: string, config: Record<string, string>) => {
     if (!user) return;
     try {
       const { error } = await supabase.from("user_plugins").upsert({ user_id: user.id, plugin_id: id, config }, { onConflict: "user_id,plugin_id" });
@@ -423,18 +443,19 @@ const Plugins = () => {
       toast.success("Configuration saved.");
       setSetupTarget(null);
       fetchPlugins();
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err) {
+      toast.error(errorMessage(err));
     }
   };
 
   const enrichedPlugins = pluginRegistry.map((plugin) => {
     const dbPlugin = dbPlugins.find((entry) => entry.plugin_id === plugin.id);
+    const config = (dbPlugin?.config as Record<string, string> | null) || {};
     return {
       ...plugin,
       status: (dbPlugin?.status || "available") as PluginStatus,
-      isConfigured: !!dbPlugin?.config && Object.keys(dbPlugin.config).length > 0,
-      config: dbPlugin?.config || {},
+      isConfigured: Object.keys(config).length > 0,
+      config,
     };
   });
 
@@ -451,7 +472,7 @@ const Plugins = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {enrichedPlugins.map((plugin) => (
-          <PluginCard key={plugin.id} plugin={plugin} isAdmin={isAdmin} isConfigured={plugin.isConfigured} onActivate={setActivateTarget} onDeactivate={handleDeactivate} onSetup={setSetupTarget} />
+          <PluginCard key={plugin.id} plugin={plugin} canManage={canManagePlugins} isConfigured={plugin.isConfigured} onActivate={setActivateTarget} onDeactivate={handleDeactivate} onSetup={setSetupTarget} />
         ))}
       </div>
 

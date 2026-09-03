@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,12 +9,24 @@ import callixisLogo from "@/assets/callixis-logo.png";
 
 const Login = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
+
+  // Phase 4 §F.7 — App.tsx redirects the old public /signup URL here with this flag rather
+  // than 404ing it; people still have it bookmarked or linked from pre-Phase-4 invites.
+  useEffect(() => {
+    if ((location.state as { signupDisabled?: boolean } | null)?.signupDisabled) {
+      toast({
+        title: "Accounts are invite-only",
+        description: "Public sign-up is off. Ask an admin to send you an invitation.",
+      });
+    }
+  }, [location.state]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,7 +40,31 @@ const Login = () => {
       return;
     }
 
-    navigate("/dashboard");
+    // Phase 5 (docs/admin-module-plan/PHASE-5-ip-whitelisting.md §D.2) — session-guard runs
+    // immediately after sign-in succeeds, before navigating anywhere. D-5 recorded decision:
+    // checked at login only, not continuously (see session-guard/index.ts's own header for
+    // why that's a materially weaker claim than "checked continuously," written down rather
+    // than silently implied). A guardError (function unreachable, cold start, etc.) fails
+    // open deliberately — an outage of this function must not become an outage of login
+    // itself; the RLS layer (ip_allowed(), in the migration) is what actually holds under
+    // attack and has no equivalent escape hatch.
+    const { data: guard, error: guardError } = await supabase.functions.invoke("session-guard");
+    if (!guardError && guard?.allowed === false) {
+      await supabase.auth.signOut();
+      toast({
+        title: "Access denied",
+        description: `Access denied from network ${guard.ip ?? "unknown"} — ask an administrator to whitelist this address.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Phase 2 (docs/admin-module-plan/PHASE-2-app-reads-roles.md §D.4/[E25]) — was a
+    // hardcoded navigate("/dashboard"). A user without the `dashboard` permission landed
+    // there anyway, and with Phase 0's route guard in place that's an instant kick-out or a
+    // redirect loop, not a login. "/" now runs LandingRedirect, which waits for the user's
+    // real permissions to load and picks the first route they actually have.
+    navigate("/");
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -131,9 +167,10 @@ const Login = () => {
               </Button>
             </form>
 
+            {/* Phase 4 §F.7/D-4: public signup is off (confirmed live) — nothing to link to
+                anymore. Accounts arrive via /admin's invite flow (Phase 4 §E) instead. */}
             <p className="text-center text-xs text-muted-foreground">
-              Don't have an account?{" "}
-              <Link to="/signup" className="text-primary hover:underline">Create Account</Link>
+              Accounts are invite-only. Ask an admin to send you an invitation.
             </p>
           </>
         )}

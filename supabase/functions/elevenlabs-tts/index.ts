@@ -52,10 +52,16 @@ serve(async (req) => {
 
     const audioBuffer = await response.arrayBuffer();
 
+    // AI Agents plan Phase 1, B.1/E2 — @supabase/functions-js only turns a Deno-side response
+    // into a Blob for Content-Type application/octet-stream or application/pdf; every other
+    // non-JSON type (including the technically-correct audio/mpeg this used to send) falls
+    // through to response.text(), so `response.data` on the caller side was a string, and
+    // `URL.createObjectURL(audioBlob)` in AIAgents.tsx threw a TypeError before ever reaching
+    // the ElevenLabs API check. The audio is still MP3 bytes; only the label changes.
     return new Response(audioBuffer, {
       headers: {
         ...corsHeaders,
-        "Content-Type": "audio/mpeg",
+        "Content-Type": "application/octet-stream",
       },
     });
   } catch (error) {

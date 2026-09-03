@@ -1,6 +1,5 @@
-import { useState, useRef } from "react";
-import Papa from "papaparse";
-import { Plus, Clock, Users, Globe, Briefcase, Bot, Upload, FileSpreadsheet, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, Clock, Users, Globe, Briefcase, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,31 +19,17 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Campaign, ALL_DAYS, WorkHours } from "./types";
+import { INDUSTRIES } from "@/lib/industries";
+import type { AiAgentRow } from "@/hooks/useAgents";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface CreateCampaignDialogProps {
   onCreated: (campaign: Campaign) => void;
+  // AI Agents plan Phase 3 §D.1/D.2/E6 — replaces the five hardcoded, nonexistent agent names
+  // this dialog used to offer. Passed down rather than fetched here so this component doesn't
+  // duplicate useAgents()'s query — Campaigns.tsx already needs the same list.
+  agents: AiAgentRow[];
 }
-
-const INDUSTRIES = [
-  "Real Estate",
-  "Insurance",
-  "Medical",
-  "Car Sales",
-  "Home Improvement",
-  "Legal",
-  "Financial Services",
-  "Education",
-  "SaaS / Tech",
-  "Other",
-];
-
-const AGENTS = [
-  "LeadGen Pro",
-  "InsureBot",
-  "MedScheduler",
-  "AutoSales AI",
-  "HomeReno Bot",
-];
 
 const defaultWorkHours: WorkHours = {
   days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -52,17 +37,28 @@ const defaultWorkHours: WorkHours = {
   endTime: "17:00",
 };
 
-const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
+const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) => {
+  // Permission-overrides plan Phase 4 §H.4 (docs/permission-overrides-plan/README.md) —
+  // campaigns.create_delete. Only super_admin/admin/sales_manager hold it (all at `full`, no
+  // partial grants exist), so presence is the whole gate.
+  const { hasPermission } = useAuth();
+  const canCreateOrDelete = hasPermission("campaigns.create_delete");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [industry, setIndustry] = useState("");
-  const [agent, setAgent] = useState("");
+  const [agentId, setAgentId] = useState<string>("");
   const [workHours, setWorkHours] = useState<WorkHours>(defaultWorkHours);
   const [maxLeads, setMaxLeads] = useState(0);
   const [crmEndpoint, setCrmEndpoint] = useState("");
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [startImmediately, setStartImmediately] = useState(false);
+
+  // §D.2 — filtered to the campaign's chosen industry, so two agents that both happen to serve
+  // "Medical" don't get offered on an "Insurance" campaign by mistake (D-1's whole reason to
+  // require an explicit pick rather than auto-matching by industry).
+  const agentsForIndustry = useMemo(
+    () => agents.filter((a) => a.industry === industry),
+    [agents, industry],
+  );
 
   const toggleDay = (day: string) => {
     setWorkHours((prev) => ({
@@ -76,11 +72,10 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
   const resetForm = () => {
     setName("");
     setIndustry("");
-    setAgent("");
+    setAgentId("");
     setWorkHours(defaultWorkHours);
     setMaxLeads(0);
     setCrmEndpoint("");
-    setUploadedFile(null);
     setStartImmediately(false);
   };
 
@@ -93,65 +88,34 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
       toast.error("Please select an industry");
       return;
     }
-    if (!agent) {
-      toast.error("Please select an AI agent");
-      return;
-    }
-    if (workHours.days.length === 0) {
-      toast.error("Select at least one active day");
-      return;
-    }
+
+    const agentName = agents.find((a) => a.id === agentId)?.name || "Unassigned";
 
     const newCampaign: Campaign = {
       id: crypto.randomUUID(),
       name: name.trim(),
       status: startImmediately ? "Active" : "Scheduled",
-      calls: 0,
-      conversion: "—",
+      callsAttempted: 0,
+      connectRate: 0,
+      qualifiedRate: 0,
       industry,
-      agent,
+      agent: agentName,
+      agentId: agentId || null,
       records: [],
       workHours,
       maxQualifiedLeads: maxLeads,
       qualifiedLeadsSent: 0,
       crmApiEndpoint: crmEndpoint.trim(),
+      budget: 0,
+      leadsTotal: 0,
+      leadCounts: { total: 0, queued: 0, dialing: 0, stalled: 0, called: 0, excluded: 0 },
+      dailyCallCap: 100,
+      timezone: "UTC",
     };
 
-    if (uploadedFile) {
-      Papa.parse(uploadedFile, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          const parsedData = results.data as any[];
-          
-          const mockRecords = parsedData.map((row, i) => ({
-            id: crypto.randomUUID(),
-            name: row.Name || row.name || `Imported Lead ${i + 1}`,
-            phone: row.Phone || row.phone || "",
-            email: row.Email || row.email || "",
-            status: "pending",
-            duration: "—",
-            callDate: "—",
-            hasRecording: false,
-            notes: row.Notes || row.notes || "Imported via CSV",
-            agent
-          })).filter(record => record.phone || record.email);
-          
-          newCampaign.records = mockRecords;
-          
-          onCreated(newCampaign);
-          resetForm();
-          setOpen(false);
-        },
-        error: (error: any) => {
-          toast.error(`Failed to parse CSV: ${error.message}`);
-        }
-      });
-    } else {
-      onCreated(newCampaign);
-      resetForm();
-      setOpen(false);
-    }
+    onCreated(newCampaign);
+    resetForm();
+    setOpen(false);
   };
 
   return (
@@ -163,7 +127,7 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
       }}
     >
       <DialogTrigger asChild>
-        <Button className="glow-cyan">
+        <Button className="glow-cyan" disabled={!canCreateOrDelete} title={canCreateOrDelete ? undefined : "Needs the Campaigns — Create/Delete Campaign permission"}>
           <Plus className="h-4 w-4 mr-2" />
           New Campaign
         </Button>
@@ -200,7 +164,7 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
                 <Label className="text-xs text-muted-foreground">
                   Industry
                 </Label>
-                <Select value={industry} onValueChange={setIndustry}>
+                <Select value={industry} onValueChange={(v) => { setIndustry(v); setAgentId(""); }}>
                   <SelectTrigger className="bg-secondary border-border text-sm">
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
@@ -217,21 +181,29 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
                 <Label className="text-xs text-muted-foreground">
                   AI Agent
                 </Label>
-                <Select value={agent} onValueChange={setAgent}>
+                {/* §D.3 — an industry with zero agents isn't an error state; the campaign can
+                    still be created "Unassigned" and pointed at an agent later once one exists
+                    (CampaignSettingsDialog, §D.5). Required-and-empty would be a dead end. */}
+                <Select value={agentId} onValueChange={setAgentId} disabled={!industry || agentsForIndustry.length === 0}>
                   <SelectTrigger className="bg-secondary border-border text-sm">
-                    <SelectValue placeholder="Select…" />
+                    <SelectValue placeholder={!industry ? "Pick an industry first" : agentsForIndustry.length === 0 ? "No agents yet — optional" : "Unassigned"} />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border">
-                    {AGENTS.map((a) => (
-                      <SelectItem key={a} value={a}>
+                    {agentsForIndustry.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
                         <div className="flex items-center gap-1.5">
                           <Bot className="h-3.5 w-3.5 text-primary" />
-                          {a}
+                          {a.name}
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {industry && agentsForIndustry.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    No agents for "{industry}" yet — create one in AI Agents, or start this campaign Unassigned.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -340,60 +312,9 @@ const CreateCampaignDialog = ({ onCreated }: CreateCampaignDialogProps) => {
             </div>
           </div>
 
-          {/* Upload Data */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Upload className="h-4 w-4 text-primary" />
-              Upload Contact Data
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">
-                Import contacts from a CSV or Excel file (optional)
-              </Label>
-              {uploadedFile ? (
-                <div className="flex items-center gap-2 bg-secondary rounded-lg p-2.5 border border-border">
-                  <FileSpreadsheet className="h-4 w-4 text-primary shrink-0" />
-                  <span className="text-sm text-foreground truncate flex-1">{uploadedFile.name}</span>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {(uploadedFile.size / 1024).toFixed(1)} KB
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUploadedFile(null);
-                      if (fileInputRef.current) fileInputRef.current.value = "";
-                    }}
-                    className="text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : (
-                <div
-                  className="border-2 border-dashed border-border rounded-lg p-5 text-center hover:border-primary/40 transition-colors cursor-pointer"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-1.5" />
-                  <p className="text-xs text-muted-foreground mb-1">Click to browse or drag & drop</p>
-                  <p className="text-xs text-muted-foreground/60">Supported: .csv, .xlsx, .xls</p>
-                </div>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) setUploadedFile(file);
-                }}
-              />
-            </div>
-            <div className="bg-secondary/50 rounded-lg p-2.5 border border-border">
-              <p className="text-xs text-muted-foreground font-medium mb-0.5">Expected columns:</p>
-              <p className="text-xs text-muted-foreground">Name, Phone, Email, Notes (optional)</p>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Add leads after creating the campaign, from the campaign's "Upload Data" button.
+          </p>
 
           <div className="flex gap-2 pt-1">
             <Button

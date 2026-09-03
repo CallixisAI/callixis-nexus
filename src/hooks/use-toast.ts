@@ -12,6 +12,12 @@ type ToasterToast = ToastProps & {
   action?: ToastActionElement;
 };
 
+// Standard shadcn/ui toast-hook boilerplate — the object exists only so `ActionType` below can
+// derive its shape via `typeof`; nothing ever reads `actionTypes` itself at runtime, which is
+// exactly what @typescript-eslint/no-unused-vars is (correctly) flagging now that the rule is
+// back on (Phase 7 admin-module-plan D-11). Left as upstream shadcn wrote it rather than
+// restructured, since this file is otherwise a vendored copy.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
   UPDATE_TOAST: "UPDATE_TOAST",

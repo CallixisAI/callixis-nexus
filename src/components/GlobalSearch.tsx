@@ -11,18 +11,16 @@ type SearchResult = {
   url: string;
 };
 
-const MOCK_RESULTS: SearchResult[] = [
-  { type: "agent", title: "LeadGen Pro", subtitle: "AI Agent · Running · Real Estate", url: "/ai-agents" },
-  { type: "agent", title: "InsureBot", subtitle: "AI Agent · Running · Insurance", url: "/ai-agents" },
-  { type: "agent", title: "MedScheduler", subtitle: "AI Agent · Paused · Medical", url: "/ai-agents" },
-  { type: "campaign", title: "Real Estate Q1", subtitle: "Campaign · 12,400 leads", url: "/campaigns" },
-  { type: "campaign", title: "Medicare Enrollment", subtitle: "Campaign · 8,900 leads", url: "/campaigns" },
-  { type: "call", title: "Call #1842 – Sarah Johnson", subtitle: "Completed · LeadGen Pro · 4:32", url: "/call-center" },
-  { type: "call", title: "Call #1841 – Michael Chen", subtitle: "Active · InsureBot · 2:15", url: "/call-center" },
-  { type: "event", title: "Callback – Mark Davis", subtitle: "Tomorrow 2:00 PM · Real Estate", url: "/calendar" },
-  { type: "finance", title: "Deposit – $5,000", subtitle: "Completed · Bank wire · Mar 24", url: "/finance" },
-  { type: "lead", title: "Lead #4521 – James Wilson", subtitle: "Real Estate · Florida · Hot", url: "/marketplace" },
-];
+// Phase 7 admin-module-plan (docs/admin-module-plan/PHASE-7-audit-and-hardening.md §D — "Hide
+// or wire up the fake global search") — D.5's fix. This used to be ten fabricated
+// customer-shaped records ("Call #1842 – Sarah Johnson", a fake $5,000 deposit, ...), rendered
+// on every page including /admin, that looked like real production data but were never wired
+// to anything. Real cross-table search (agents/campaigns/calls/leads, RLS-respecting) is a
+// feature build in its own right, not "hardening" — out of scope here. The cheap, honest fix:
+// hide the fake results rather than build the real feature under this phase's budget. The ⌘K
+// entry point stays (so it's a small change to wire up real search later, per the empty-state
+// message below), it just no longer lies about having anything to show.
+const MOCK_RESULTS: SearchResult[] = [];
 
 const iconMap: Record<string, typeof Bot> = {
   agent: Bot,
@@ -97,7 +95,11 @@ export const GlobalSearch = () => {
           </div>
           <div className="max-h-72 overflow-y-auto py-2">
             {filtered.length === 0 ? (
-              <p className="text-center text-sm text-muted-foreground py-8">No results found</p>
+              // D.5 — honest now that MOCK_RESULTS is empty: this used to render fabricated
+              // results for ANY query, which read as real search. It never was.
+              <p className="text-center text-sm text-muted-foreground py-8 px-6">
+                Search isn't wired up to real data yet — try the sidebar instead.
+              </p>
             ) : (
               filtered.map((result, i) => {
                 const Icon = iconMap[result.type] || Bot;

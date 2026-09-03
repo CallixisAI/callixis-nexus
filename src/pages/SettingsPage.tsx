@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { User, Bell, Key, Building2, Save, Eye, EyeOff, Copy } from "lucide-react";
+import { User, Bell, Key, Building2, Save, Eye, EyeOff, Copy, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +8,17 @@ import { Card } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { MyNetworksCard } from "@/components/settings/MyNetworksCard";
 
+// Permission-overrides plan Phase 4 §H.2 (docs/permission-overrides-plan/README.md) —
+// settings.system_configuration and settings.api_integrations are seeded (critical, held by
+// super_admin/admin/it_manager at `full`) but there is genuinely nothing on this page to gate
+// with them yet: the Notifications and API Keys tabs are both explicitly placeholder/read-only
+// ("Notification storage is not implemented yet", "There is no real API key issuance flow
+// yet" below), and the one real write action (Save Changes, on the Profile/Company tabs) is
+// ordinary self-service every signed-in user gets, not a privileged system-config action.
+// Recorded here rather than forcing a fake gate onto placeholder UI — wire these two the day a
+// real system-configuration or API-integration screen is built, not before.
 const SettingsPage = () => {
   const { user, profile, role } = useAuth();
   const [fullName, setFullName] = useState(profile?.full_name || "");
@@ -57,6 +67,10 @@ const SettingsPage = () => {
           <TabsTrigger value="company" className="gap-2"><Building2 className="h-3.5 w-3.5" />Company</TabsTrigger>
           <TabsTrigger value="notifications" className="gap-2"><Bell className="h-3.5 w-3.5" />Notifications</TabsTrigger>
           <TabsTrigger value="api" className="gap-2"><Key className="h-3.5 w-3.5" />API Keys</TabsTrigger>
+          {/* Phase 5 admin-module-plan (docs/admin-module-plan/PHASE-5-ip-whitelisting.md §C,
+              D-7) — self-declare half of "self-declared, admin-approved." Lives here, not in
+              Admin.tsx, because every signed-in user needs to reach it, not just admins. */}
+          <TabsTrigger value="security" className="gap-2"><Globe className="h-3.5 w-3.5" />Security</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-6">
@@ -136,6 +150,10 @@ const SettingsPage = () => {
               <p className="text-xs text-muted-foreground">Useful for UI prototyping only. Replace this tab with a real key issuance backend before exposing it publicly.</p>
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="security" className="space-y-6">
+          <MyNetworksCard />
         </TabsContent>
       </Tabs>
     </div>

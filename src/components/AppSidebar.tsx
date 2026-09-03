@@ -1,22 +1,9 @@
 import { useState, useEffect } from "react";
-import {
-  LayoutDashboard,
-  ShieldAlert,
-  Megaphone,
-  Bot,
-  Puzzle,
-  Headphones,
-  BarChart3,
-  DollarSign,
-  Store,
-  Settings,
-  CalendarCheck,
-  Globe,
-  LogOut,
-} from "lucide-react";
+import { Globe, LogOut } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { APP_PERMISSIONS } from "@/lib/permissions";
 import callixisLogo from "@/assets/callixis-logo.png";
 
 import {
@@ -33,33 +20,18 @@ import {
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
-  const location = useLocation();
   const navigate = useNavigate();
   const { signOut, profile, role, hasPermission } = useAuth();
 
   const [gmtTime, setGmtTime] = useState("");
 
-  const isAdmin = role === "admin";
-
-  const allNavItems = [
-    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, permission: "dashboard" },
-    { title: "Admin", url: "/admin", icon: ShieldAlert, isAdminOnly: true },
-    { title: "Campaigns", url: "/campaigns", icon: Megaphone, permission: "campaigns" },
-    { title: "AI Agents", url: "/ai-agents", icon: Bot, permission: "ai-agents" },
-    { title: "Plugins", url: "/plugins", icon: Puzzle, permission: "plugins" },
-    { title: "Call Center", url: "/call-center", icon: Headphones, permission: "call-center" },
-    { title: "Reports", url: "/reports", icon: BarChart3, permission: "reports" },
-    { title: "Finance", url: "/finance", icon: DollarSign, permission: "finance" },
-    { title: "Marketplace", url: "/marketplace", icon: Store, permission: "marketplace" },
-    { title: "Calendar", url: "/calendar", icon: CalendarCheck, permission: "calendar" },
-    { title: "Settings", url: "/settings", icon: Settings, permission: "settings" },
-  ];
-
-  const navItems = allNavItems.filter(item => {
-    if (item.isAdminOnly) return isAdmin;
-    if (item.permission) return hasPermission(item.permission);
-    return true;
-  });
+  // Phase 2 (docs/admin-module-plan/PHASE-2-app-reads-roles.md §A/§D): the nav list used to
+  // be a second, hand-maintained copy of Admin.tsx's APP_FEATURES [E14], and the Admin item
+  // was gated on a hardcoded role string (isAdminOnly) instead of a permission [E7]-adjacent
+  // in spirit. Both are gone — one shared catalogue, one gate (hasPermission), same source
+  // ProtectedRoute reads (src/lib/access.ts), so the sidebar and the route guard cannot
+  // disagree about what a user can reach.
+  const navItems = APP_PERMISSIONS.filter((item) => hasPermission(item.key));
 
   useEffect(() => {
     const tick = () => {
@@ -100,16 +72,16 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
+                <SidebarMenuItem key={item.key}>
                   <SidebarMenuButton asChild>
                     <NavLink
-                      to={item.url}
-                      end={item.url === "/dashboard"}
+                      to={item.route}
+                      end={item.route === "/dashboard"}
                       className="hover:bg-sidebar-accent/50 transition-colors"
                       activeClassName="bg-sidebar-accent text-primary font-medium"
                     >
                       <item.icon className="h-4 w-4 mr-2 shrink-0" />
-                      {!collapsed && <span>{item.title}</span>}
+                      {!collapsed && <span>{item.label}</span>}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

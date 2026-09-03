@@ -36,10 +36,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import PiggyBank from "@/components/finance/PiggyBank";
 import { useCampaigns } from "@/hooks/useCampaigns";
+import { useAuth } from "@/contexts/AuthContext";
 
 type TxStatus = "completed" | "pending" | "failed";
 type TxType = "budget" | "revenue" | "lead";
@@ -68,11 +68,6 @@ const typeLabels: Record<TxType, { label: string; color: string }> = {
 
 const formatCurrency = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(n));
-
-const formatDate = (value?: string) => {
-  if (!value) return "Just now";
-  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-};
 
 const BalanceCards = ({ balance, pending, earned }: { balance: number; pending: number; earned: number }) => (
   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -182,7 +177,22 @@ const TransactionRow = ({ tx }: { tx: Transaction }) => {
 };
 
 const Finance = () => {
-  const { campaigns = [], isLoading } = useCampaigns();
+  // C.16/E14 — not defaulted in the destructure: useCampaigns() returns TanStack Query's `data`,
+  // undefined until the query resolves, so `campaigns = []` here would mint a fresh array every
+  // render and invalidate the useMemo below on every render while loading. Default inside the
+  // memo instead (the same fix CallCenter.tsx's 2026-08-31 crash already established).
+  const { campaigns, isLoading } = useCampaigns();
+  // Permission-overrides plan Phase 4 §H.2 (docs/permission-overrides-plan/README.md) —
+  // finance.budget gates the two money-committing actions (only super_admin holds it at all,
+  // per Phase 1 D-2's "admin differs from super_admin in exactly three places" finding);
+  // finance.transaction_history gates seeing/acting on the transaction ledger, with `full`
+  // specifically required for refund per D-3's concrete table ("view: read transactions.
+  // Cannot refund, void or adjust").
+  const { hasPermission, hasPermissionAtLeast } = useAuth();
+  const canManageBudget = hasPermission("finance.budget");
+  const canViewTransactions = hasPermission("finance.transaction_history");
+  const canRefund = hasPermissionAtLeast("finance.transaction_history", "full");
+  const canViewRevenue = hasPermission("finance.revenue_reports");
   const [depositOpen, setDepositOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
@@ -191,7 +201,7 @@ const Finance = () => {
   const transactions = useMemo(() => {
     const items: Transaction[] = [];
 
-    campaigns.forEach((campaign) => {
+    (campaigns ?? []).forEach((campaign) => {
       if (campaign.budget > 0) {
         items.push({
           id: `${campaign.id}-budget`,
@@ -222,7 +232,10 @@ const Finance = () => {
           id: `${campaign.id}-leads`,
           type: "lead",
           amount: campaign.qualifiedLeadsSent * 75,
-          status: campaign.status === "Completed" ? "completed" : "pending",
+          // C.9 — Campaign["status"] never reaches "Completed" (campaigns.status is only ever
+          // active/paused/scheduled); this always evaluated to "pending" in practice, since no
+          // payment provider is wired up yet (see the disclaimer card below).
+          status: "pending",
           description: `${campaign.qualifiedLeadsSent} qualified leads from ${campaign.name}`,
           date: campaign.records[0]?.callDate || "",
           reference: `LEAD-${campaign.id.slice(0, 8).toUpperCase()}`,
@@ -238,8 +251,8 @@ const Finance = () => {
   const totalRevenue = transactions.filter((transaction) => transaction.type === "revenue").reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
   const totalBudget = transactions.filter((transaction) => transaction.type === "budget").reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
   const pipelineValue = transactions.filter((transaction) => transaction.type === "lead").reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
-  const totalCalls = campaigns.reduce((sum, campaign) => sum + campaign.calls, 0);
-  const totalQualifiedLeads = campaigns.reduce((sum, campaign) => sum + campaign.qualifiedLeadsSent, 0);
+  const totalCalls = (campaigns ?? []).reduce((sum, campaign) => sum + campaign.callsAttempted, 0);
+  const totalQualifiedLeads = (campaigns ?? []).reduce((sum, campaign) => sum + campaign.qualifiedLeadsSent, 0);
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading finance data...</div>;
@@ -253,15 +266,31 @@ const Finance = () => {
           <p className="text-sm text-muted-foreground mt-1">Commercial view of budgets, lead value, and campaign revenue</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button onClick={() => setDepositOpen(true)} className="gap-2"><Plus className="h-4 w-4" /> Add Budget</Button>
-          <Button onClick={() => setWithdrawOpen(true)} variant="outline" className="gap-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"><ArrowUpRight className="h-4 w-4" /> Withdraw</Button>
-          <Button onClick={() => setRefundOpen(true)} variant="outline" className="gap-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300"><RotateCcw className="h-4 w-4" /> Refund</Button>
+          <Button onClick={() => setDepositOpen(true)} disabled={!canManageBudget} className="gap-2"><Plus className="h-4 w-4" /> Add Budget</Button>
+          <Button onClick={() => setWithdrawOpen(true)} disabled={!canManageBudget} variant="outline" className="gap-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"><ArrowUpRight className="h-4 w-4" /> Withdraw</Button>
+          <Button onClick={() => setRefundOpen(true)} disabled={!canRefund} variant="outline" className="gap-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300"><RotateCcw className="h-4 w-4" /> Refund</Button>
         </div>
       </div>
+      {!canManageBudget && (
+        <p className="text-[11px] text-muted-foreground -mt-2">
+          Adding or withdrawing budget needs the Finance — Add/Withdraw Budget permission.
+        </p>
+      )}
 
-      <BalanceCards balance={totalRevenue} pending={totalBudget} earned={pipelineValue} />
-
-      <PiggyBank depositAmounts={completedDepositAmounts} />
+      {/* finance.revenue_reports (§H.2) — "view: read reports." No parameter/export control
+          exists yet on this page to distinguish edit/full from view, so presence alone is the
+          whole gate for now (D-3's concrete table flags this permission as currently
+          unexercised beyond view for most holders). */}
+      {canViewRevenue ? (
+        <>
+          <BalanceCards balance={totalRevenue} pending={totalBudget} earned={pipelineValue} />
+          <PiggyBank depositAmounts={completedDepositAmounts} />
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground bg-card border border-border rounded-lg p-4">
+          Revenue figures need the Finance — Revenue Reports permission.
+        </p>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="bg-card border-border">
@@ -330,7 +359,11 @@ const Finance = () => {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {filtered.length === 0 ? (
+          {!canViewTransactions ? (
+            <div className="p-8 text-center text-muted-foreground text-sm">
+              Viewing the transaction ledger needs the Finance — Transaction History permission.
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground text-sm">No financial activity yet. Create campaigns and import leads first.</div>
           ) : (
             filtered.map((transaction) => <TransactionRow key={transaction.id} tx={transaction} />)

@@ -1,17 +1,55 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Plus, Play, Pause, Wand2, FileText, Volume2, Square, MessageSquare, Loader2, BrainCircuit, Send, X, Check, Trash2 } from "lucide-react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import type { User } from "@supabase/supabase-js";
+import { Bot, Plus, Play, Pause, Wand2, FileText, Volume2, Mic, Square, MessageSquare, Loader2, BrainCircuit, Send, Check, Trash2, Pencil, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import type { Database } from "@/integrations/supabase/types";
+import { describeFunctionError as sharedDescribeFunctionError } from "@/lib/functionError";
+import { INDUSTRIES } from "@/lib/industries";
+import { useAgents, isDuplicateAgentName, type AiAgentRow } from "@/hooks/useAgents";
+import { ConfirmActionDialog } from "@/components/admin/ConfirmActionDialog";
+
+type AgentRow = Database["public"]["Tables"]["ai_agents"]["Row"];
+// B.8/B.9 — `calls`/`successRate` deleted: both were computed, neither was ever rendered, and
+// successRate hardcoded 18% regardless of any real data (E13).
+type DisplayAgent = AgentRow & { displayStatus: string };
+type ActivePlugin = Pick<Database["public"]["Tables"]["user_plugins"]["Row"], "plugin_id" | "status">;
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+// Phase 5 §F.1/F.2, generic part extracted to src/lib/functionError.ts (Phase 3) so
+// useRoles.ts's manage-users caller doesn't duplicate it. The FunctionsFetchError/timeout
+// special-case below is specific to this page's own n8n webhook call, so it stays local.
+const CHAT_TIMEOUT_MS = 30_000;
+
+async function describeFunctionError(error: unknown): Promise<string> {
+  const err = error as { name?: string; message?: string; context?: unknown };
+  if (err?.name === "FunctionsFetchError") {
+    return "Timed out waiting for the workflow to respond (30s). Check the webhook URL in the Plugins tab.";
+  }
+  return sharedDescribeFunctionError(error, "Failed to reach the workflow backend.");
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
 
 const statusStyles: Record<string, string> = {
   running: "text-primary bg-primary/10",
@@ -20,38 +58,251 @@ const statusStyles: Record<string, string> = {
   idle: "text-muted-foreground bg-secondary/50",
 };
 
+// AI Agents plan Phase 1 §B.6/B.7 (E2) — the two `provider: "vapi"` entries this registry used
+// to carry (`aria`, `roger`) were sent straight to `elevenlabs-tts`, which has no idea what a
+// Vapi-native voice id is and 404s. There's no VAPI_API_KEY anywhere in this app (E18) to build
+// a second, Vapi-backed preview path, and D-13's mechanism doesn't need one — voice selection
+// here only ever drives `voice_settings`/`voice`, never a live Vapi call. Dropped rather than
+// branched, since branching would need a preview backend that doesn't exist.
 const VOICE_REGISTRY = [
   { id: "eleven-sarah", name: "Sarah", provider: "elevenlabs", voiceId: "EXAVITQu4vr4xnSDxMaL", language: "en", flag: "🇺🇸", desc: "Warm, professional" },
   { id: "eleven-james", name: "James", provider: "elevenlabs", voiceId: "JBFqnCBsd6RMkjVDRZzb", language: "en", flag: "🇺🇸", desc: "Confident, authoritative" },
-  { id: "vapi-aria", name: "Aria", provider: "vapi", voiceId: "aria", language: "en", flag: "🇺🇸", desc: "Fast, conversational" },
-  { id: "vapi-roger", name: "Roger", provider: "vapi", voiceId: "roger", language: "en", flag: "🇬🇧", desc: "British, articulate" },
 ];
 
-const INDUSTRIES = ["Real Estate", "Insurance", "Medical", "Finance", "Car Sales", "Home Improvement", "Other"];
+// Phase 2 §C.15 — only plugins that are genuinely a *logic* provider belong here. Before this,
+// every active plugin (including e.g. `twilio`, a telephony gateway with no bearing on how the
+// agent reasons) was offered as if it were an AI model choice. `n8n` is the one real case: an
+// agent's replies can genuinely be generated by the customer's own n8n workflow (see `n8n-proxy`
+// and the Chat Test dialog below), so it stays.
+const LOGIC_PROVIDER_ALLOWED_PLUGINS = new Set(["n8n"]);
 
-const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; onClose: () => void }) => {
-  const { user } = useAuth();
-  const [messages, setMessages] = useState<any[]>([]);
+// Phase 2 §C.14 — the agent's `model` column no longer derives from `logicProvider` at all
+// (it used to write the literal logic-provider string — e.g. "vapi" or a plugin id — into a
+// column meant to name an LLM, which is a category error). This app has exactly one LLM it
+// deploys agents with today; when a real per-agent model picker exists, this is where it goes.
+const DEFAULT_MODEL = "gemini-1.5-pro";
+
+// Phase 2 §D-14 — "Planning Script" renamed to "Extra Instructions" per D-13: the industry Vapi
+// assistant (docs/AI-Agents-plan/README.md, Phase 4/5) keeps its own full system prompt; this
+// field is appended on top via a `{{extra_instructions}}` placeholder Vapi substitutes into that
+// prompt, never a replacement. An empty value is fine — the placeholder just resolves to nothing
+// and the assistant behaves exactly as it does without this feature.
+const EXTRA_INSTRUCTIONS_LABEL = "Extra Instructions";
+
+// Small custom hook — three separate call sites in this file (Chat Test, the create wizard, the
+// edit dialog) all needed the identical "call elevenlabs-tts, turn the response into a Blob URL,
+// play it, clean up" logic; this collapses them into one place instead of tripling it.
+function useVoicePreview() {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+
+  const speak = useCallback(async (text: string, voiceId: string) => {
+    if (isSpeaking) return;
+    setIsSpeaking(true);
+    setActiveVoiceId(voiceId);
+    try {
+      const response = await supabase.functions.invoke("elevenlabs-tts", { body: { text, voiceId } });
+      if (response.error) throw response.error;
+      // Phase 1 §B.1/E2 — elevenlabs-tts now returns Content-Type: application/octet-stream,
+      // which functions-js actually converts to a Blob (audio/mpeg fell through to text()).
+      const audioBlob = response.data as Blob;
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setActiveVoiceId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      await audio.play();
+    } catch (err) {
+      setIsSpeaking(false);
+      setActiveVoiceId(null);
+      toast.error(errorMessage(err) || "Voice preview failed.");
+    }
+  }, [isSpeaking]);
+
+  return { isSpeaking, activeVoiceId, speak };
+}
+
+function VoicePicker({ voice, onSelect, disabled }: { voice: string; onSelect: (voiceId: string) => void; disabled?: boolean }) {
+  const { isSpeaking, activeVoiceId, speak } = useVoicePreview();
+  return (
+    <div className="space-y-2">
+      <Label>Voice Preference</Label>
+      {/* Permission-overrides plan Phase 4 §H.3 — agents.voice_model_config. Preview (the
+          Volume2 button below) stays enabled either way — it's read-only and not one of D-3's
+          flagged spend items; only committing a new selection is gated. */}
+      <ScrollArea className="h-[180px] rounded-md border border-border p-2 bg-secondary/30">
+        <div className="grid grid-cols-1 gap-2">
+          {VOICE_REGISTRY.map((entry) => (
+            <button key={entry.id} type="button" onClick={() => !disabled && onSelect(entry.id)} className={`p-3 rounded-lg border text-sm text-left transition-all flex items-center justify-between ${voice === entry.id ? "border-primary bg-primary/10" : "border-border bg-card"} ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}>
+              <div className="flex items-center gap-3">
+                <span className="text-xl">{entry.flag}</span>
+                <div>
+                  <p className="font-bold">{entry.name} <span className="text-[10px] text-muted-foreground uppercase ml-1">({entry.provider})</span></p>
+                  <p className="text-[10px] text-muted-foreground">{entry.desc}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={isSpeaking && activeVoiceId !== entry.voiceId}
+                  className={`h-8 w-8 text-primary hover:bg-primary/10 ${activeVoiceId === entry.voiceId ? "animate-pulse" : ""}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    speak("Hi, I'm one of the Callixis voices.", entry.voiceId);
+                  }}
+                >
+                  {activeVoiceId === entry.voiceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                </Button>
+                {voice === entry.id && <Check className="h-4 w-4 text-primary" />}
+              </div>
+            </button>
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+function LogicProviderSelect({ value, onChange, activePlugins, disabled }: { value: string; onChange: (v: string) => void; activePlugins: ActivePlugin[]; disabled?: boolean }) {
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Logic Provider</Label>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Default AI" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">Default Callixis AI</SelectItem>
+          {activePlugins.filter((plugin) => LOGIC_PROVIDER_ALLOWED_PLUGINS.has(plugin.plugin_id)).map((plugin) => (
+            <SelectItem key={plugin.plugin_id} value={plugin.plugin_id}>{plugin.plugin_id}</SelectItem>
+          ))}
+          <SelectItem value="vapi">Vapi AI (Direct)</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+// Phase 2 §C.16/C.17 — the generate button's own prompt no longer asks for a full call script:
+// this field's content becomes the *value* substituted into `{{extra_instructions}}` inside the
+// industry assistant's own prompt (D-13), so it must never contain `{{}}` syntax itself — that
+// would be a placeholder inside a placeholder's value, which Vapi does not recursively expand.
+async function generateExtraInstructions(industry: string, userId: string | undefined): Promise<string> {
+  const prompt = `Write 2-4 short bullet points of extra guidance for an AI sales agent working ${industry} leads — things to emphasize, tone, or handling specific to this account. This is NOT a full call script; the assistant already has one. Do not use any {{double-brace}} placeholders or variables anywhere in the output — plain text only.`;
+  const response = await supabase.functions.invoke("n8n-proxy", {
+    body: {
+      message: prompt,
+      agent_id: "script-generator",
+      agent_name: "Genie",
+      user_id: userId,
+      context: "Generate Script",
+    },
+    timeout: CHAT_TIMEOUT_MS,
+  });
+  if (response.error) throw new Error(await describeFunctionError(response.error));
+  const data = response.data;
+  const generated = data?.output || data?.message || data?.data || data;
+  if (generated && typeof generated === "string") return generated;
+  throw new Error("No script text returned by workflow.");
+}
+
+function ExtraInstructionsField({ value, onChange, industry, userId, disabled }: { value: string; onChange: (v: string) => void; industry: string; userId: string | undefined; disabled?: boolean }) {
+  const [isGenerating, setIsGenerating] = useState(false);
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> {EXTRA_INSTRUCTIONS_LABEL}</Label>
+      <div className="relative">
+        <Textarea value={value} onChange={(event) => onChange(event.target.value)} rows={6} placeholder="Optional — leave blank if this account needs nothing special." className="bg-secondary/50 border-border pr-12" disabled={disabled} />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="absolute top-2 right-2 h-8 w-8 text-primary hover:bg-primary/10"
+          onClick={async () => {
+            if (!industry) {
+              toast.error("Please select an industry first");
+              return;
+            }
+            setIsGenerating(true);
+            try {
+              const generated = await generateExtraInstructions(industry, userId);
+              onChange(generated);
+              toast.success("Instructions generated");
+            } catch (err) {
+              toast.error(`Generation failed: ${errorMessage(err)}`);
+            } finally {
+              setIsGenerating(false);
+            }
+          }}
+          disabled={isGenerating || disabled}
+        >
+          {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+        </Button>
+      </div>
+      {/* §C.17 — replaces the old "Saved to the agent's `script` column on deploy." developer
+          caption (§C.18) with an explanation of what this field actually does. Permission-
+          overrides plan Phase 4 §H.3 — agents.prompt_engineering gates this field and
+          WelcomeMessageField below. */}
+      <p className="text-xs text-muted-foreground">
+        {disabled
+          ? "Editing this needs the AI Agents — Prompt Engineering permission."
+          : "The industry's Vapi assistant runs the actual conversation. Whatever you write here is added on top for this agent's calls only — leaving it blank is completely fine."}
+      </p>
+    </div>
+  );
+}
+
+function WelcomeMessageField({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-2"><MessageCircle className="h-4 w-4 text-primary" /> Welcome Message</Label>
+      <Input value={value} onChange={(event) => onChange(event.target.value)} placeholder="Optional — a custom opening line for this agent" className="bg-secondary/50 border-border" disabled={disabled} />
+    </div>
+  );
+}
+
+const TestChatDialog = ({ agent, open, onClose }: { agent: DisplayAgent | null; open: boolean; onClose: () => void }) => {
+  const { user, hasPermissionAtLeast } = useAuth();
+  // Permission-overrides plan Phase 4 §H.3 — agents.chat_testing (docs/permission-overrides-plan/
+  // README.md D-3's own explicit flag: "gates spend — API credit"). Opening this dialog only
+  // needs the page-level ai-agents permission (the parent gates the Chat Test button on any
+  // level of agents.chat_testing, D-3: "See the Chat Test panel"); actually sending a message —
+  // the action that spends credit — needs `full`.
+  const canRunTest = hasPermissionAtLeast("agents.chat_testing", "full");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const { isSpeaking, speak } = useVoicePreview();
 
   useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    type SpeechWindow = Window & {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    const speechWindow = window as SpeechWindow;
+    const SpeechRecognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
     if (SpeechRecognition) {
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.onresult = (event: any) => {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.onresult = (event) => {
         const text = event.results[0][0].transcript;
         setInput(text);
         setIsListening(false);
       };
-      recognitionRef.current.onend = () => setIsListening(false);
-      recognitionRef.current.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => setIsListening(false);
+      recognitionRef.current = recognition;
+    } else {
+      // B.14 — the mic button used to render regardless and just silently do nothing when
+      // clicked in a browser with no SpeechRecognition support (e.g. Firefox). Surface it
+      // instead of leaving an inert-looking control.
+      setSpeechSupported(false);
     }
   }, []);
 
@@ -68,6 +319,10 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   }, [messages]);
 
   const toggleListening = () => {
+    if (!speechSupported) {
+      toast.error("Voice input isn't supported in this browser — try typing instead, or use Chrome/Edge.");
+      return;
+    }
     if (isListening) recognitionRef.current?.stop();
     else {
       setIsListening(true);
@@ -75,32 +330,15 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
     }
   };
 
-  const speakText = async (text: string, overrideVoiceId?: string) => {
-    const vId = overrideVoiceId || agent.voice;
-    if (!vId || isSpeaking) return;
-    setIsSpeaking(true);
-    try {
-      const response = await supabase.functions.invoke("elevenlabs-tts", { body: { text, voiceId: vId } });
-      if (response.error) throw response.error;
-      const audioBlob = response.data;
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      audio.onended = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      audio.play();
-    } catch {
-      setIsSpeaking(false);
-      toast.error("Voice preview failed. Check API key.");
-    }
-  };
-
   const handleSend = async (overrideInput?: string) => {
     const textToSend = overrideInput || input;
     if (!textToSend.trim() || isLoading || !agent) return;
+    if (!canRunTest) {
+      toast.error("Running a chat test needs the AI Agents — Chat Testing permission at Full.");
+      return;
+    }
 
-    const userMsg = { role: "user", content: textToSend };
+    const userMsg: ChatMessage = { role: "user", content: textToSend };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
@@ -113,17 +351,18 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
           agent_name: agent.name,
           user_id: user?.id,
         },
+        timeout: CHAT_TIMEOUT_MS,
       });
 
-      if (response.error) throw new Error(response.error.message || "The proxy function returned an error.");
+      if (response.error) throw new Error(await describeFunctionError(response.error));
       const data = response.data;
       if (data.error) throw new Error(data.error);
 
       const reply = data.output || data.message || data.data || "Message received, but no text output found in n8n response.";
       setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
-      speakText(reply);
-    } catch (err: any) {
-      setMessages((prev) => [...prev, { role: "assistant", content: `Connection Error: ${err.message || "Failed to reach the workflow backend."}` }]);
+      if (agent.voice) void speak(reply, agent.voice);
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: "assistant", content: `Connection Error: ${errorMessage(err) || "Failed to reach the workflow backend."}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -155,12 +394,17 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
           </div>
         </ScrollArea>
 
+        {!canRunTest && (
+          <p className="px-4 text-[11px] text-muted-foreground">
+            You can view this panel, but running a test needs the Chat Testing permission at Full.
+          </p>
+        )}
         <div className="p-4 border-t border-border shrink-0 flex gap-2 items-center">
-          <Button onClick={toggleListening} variant="outline" size="icon" className={`h-9 w-9 shrink-0 ${isListening ? "bg-red-500/20 text-red-500 border-red-500/30 animate-pulse" : "border-border"}`}>
-            {isListening ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          <Button onClick={toggleListening} variant="outline" size="icon" disabled={!canRunTest} className={`h-9 w-9 shrink-0 ${isListening ? "bg-red-500/20 text-red-500 border-red-500/30 animate-pulse" : "border-border"} ${!speechSupported ? "opacity-50" : ""}`}>
+            {isListening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
           </Button>
-          <Input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Type or talk..." onKeyDown={(event) => event.key === "Enter" && handleSend()} className="bg-secondary border-border h-9 text-sm" />
-          <Button onClick={() => handleSend()} disabled={isLoading} className="glow-cyan h-9 w-9 p-0"><Send className="h-4 w-4" /></Button>
+          <Input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Type or talk..." onKeyDown={(event) => event.key === "Enter" && handleSend()} disabled={!canRunTest} className="bg-secondary border-border h-9 text-sm" />
+          <Button onClick={() => handleSend()} disabled={isLoading || !canRunTest} className="glow-cyan h-9 w-9 p-0"><Send className="h-4 w-4" /></Button>
           {isSpeaking && <div className="absolute right-6 bottom-20 bg-primary/20 p-2 rounded-full border border-primary/30 animate-bounce"><Volume2 className="h-4 w-4 text-primary" /></div>}
         </div>
       </DialogContent>
@@ -168,61 +412,69 @@ const TestChatDialog = ({ agent, open, onClose }: { agent: any; open: boolean; o
   );
 };
 
-const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; onClose: () => void; activePlugins: any[]; user: any }) => {
+interface AgentFormValues {
+  name: string;
+  industry: string;
+  script: string;
+  welcomeMessage: string;
+  voice: string;
+  logicProvider: string;
+}
+
+const emptyAgentForm = (): AgentFormValues => ({
+  name: "",
+  industry: "",
+  // §C.19 — the old default (`"Hello! My name is {{agent_name}}."`) shipped a variable the
+  // engine never sent (E21). Extra Instructions being blank is the documented, supported case
+  // (D-13) — {{agent_name}} is still a real variable an agent CAN use (A.12), just not by default.
+  script: "",
+  welcomeMessage: "",
+  voice: "eleven-sarah",
+  logicProvider: "default",
+});
+
+const AgentWizard = ({ open, onClose, activePlugins, user, existingAgents, onCreate }: {
+  open: boolean;
+  onClose: () => void;
+  activePlugins: ActivePlugin[];
+  user: User | null;
+  existingAgents: AiAgentRow[];
+  onCreate: (agent: AgentFormValues) => Promise<void>;
+}) => {
+  const { hasPermission } = useAuth();
+  // Permission-overrides plan Phase 4 §H.3 — the wizard as a whole is gated on agents.deploy at
+  // the "+ Deploy Agent" button in the parent (E.g. AIAgents() below); the Instructions/Brain &
+  // Logic steps additionally respect prompt_engineering/voice_model_config, since a role can
+  // hold deploy without holding either (e.g. sales_manager) — they can still create an agent
+  // with default instructions/voice, just can't customize them here.
+  const canEditInstructions = hasPermission("agents.prompt_engineering");
+  const canEditVoiceModel = hasPermission("agents.voice_model_config");
   const [step, setStep] = useState(0);
   const [isDeploying, setIsDeploying] = useState(false);
-  const [agentName, setAgentName] = useState("");
-  const [industry, setIndustry] = useState("");
-  const [script, setScript] = useState("Hello! My name is {{agent_name}}.");
-  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
-  const [voice, setVoice] = useState("eleven-sarah");
-  const [logicProvider, setLogicProvider] = useState("default");
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+  const [form, setForm] = useState<AgentFormValues>(emptyAgentForm());
 
-  const WIZARD_STEPS = ["Basics", "Script", "Brain & Logic", "Review"];
+  const WIZARD_STEPS = ["Basics", "Instructions", "Brain & Logic", "Review"];
   const maxStep = WIZARD_STEPS.length - 1;
 
   useEffect(() => {
     if (!open) {
       setStep(0);
-      setAgentName("");
-      setIndustry("");
-      setScript("Hello! My name is {{agent_name}}.");
-      setVoice("eleven-sarah");
-      setLogicProvider("default");
+      setForm(emptyAgentForm());
     }
   }, [open]);
 
-  const selectedVoice = VOICE_REGISTRY.find((entry) => entry.id === voice);
+  const set = <K extends keyof AgentFormValues>(key: K, value: AgentFormValues[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const selectedVoice = VOICE_REGISTRY.find((entry) => entry.id === form.voice);
 
   const canNext = () => {
-    if (step === 0) return agentName.trim() && industry;
-    if (step === 1) return script.trim().length > 5;
-    return true;
-  };
-
-  const speakText = async (text: string, voiceId: string) => {
-    if (isSpeaking) return;
-    setIsSpeaking(true);
-    setActiveVoiceId(voiceId);
-    try {
-      const response = await supabase.functions.invoke("elevenlabs-tts", { body: { text, voiceId } });
-      if (response.error) throw response.error;
-      const audioBlob = response.data;
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      audio.onended = () => {
-        setIsSpeaking(false);
-        setActiveVoiceId(null);
-        URL.revokeObjectURL(audioUrl);
-      };
-      await audio.play();
-    } catch (err: any) {
-      setIsSpeaking(false);
-      setActiveVoiceId(null);
-      toast.error(err.message || "Voice preview failed.");
+    if (step === 0) {
+      if (!form.name.trim() || !form.industry) return false;
+      // §C.9 — checked at the "Basics" step, not just on final deploy, so the wizard can't be
+      // walked all the way through before finding out the name collides.
+      return !isDuplicateAgentName(form.name, existingAgents);
     }
+    return true;
   };
 
   return (
@@ -230,127 +482,51 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
       <DialogContent className="bg-card border-border max-w-2xl">
         <DialogHeader>
           <DialogTitle className="text-foreground flex items-center gap-2 font-display text-xl"><Wand2 className="h-5 w-5 text-primary" /> Create AI Agent</DialogTitle>
-          <DialogDescription>This wizard now only saves fields the database actually supports. Script and logic choices remain planning inputs for now.</DialogDescription>
+          <DialogDescription>Every choice in this wizard — name, industry, instructions, logic provider, and voice — is saved to the agent on deploy.</DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-1 mb-4">{WIZARD_STEPS.map((label, index) => <div key={label} className={`h-1.5 rounded-full flex-1 transition-colors ${index <= step ? "bg-primary" : "bg-border"}`} />)}</div>
 
         {step === 0 && (
           <div className="space-y-4">
-            <div className="space-y-2"><Label>Agent Name</Label><Input value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50 border-border" /></div>
-            <div className="space-y-2"><Label>Industry</Label><Select value={industry} onValueChange={setIndustry}><SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{INDUSTRIES.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent></Select></div>
+            <div className="space-y-2">
+              <Label>Agent Name</Label>
+              <Input value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="LeadGen Pro" className="bg-secondary/50 border-border" />
+              {form.name.trim() && isDuplicateAgentName(form.name, existingAgents) && (
+                <p className="text-xs text-destructive">An agent named "{form.name.trim()}" already exists.</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Industry</Label>
+              <Select value={form.industry} onValueChange={(v) => set("industry", v)}>
+                <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>{INDUSTRIES.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
           </div>
         )}
 
         {step === 1 && (
           <div className="space-y-4">
-            <Label className="flex items-center gap-2"><FileText className="h-4 w-4 text-primary" /> Planning Script</Label>
-            <div className="relative">
-              <Textarea value={script} onChange={(event) => setScript(event.target.value)} rows={8} className="bg-secondary/50 border-border pr-12" />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="absolute top-2 right-2 h-8 w-8 text-primary hover:bg-primary/10"
-                onClick={async () => {
-                  if (!industry) {
-                    toast.error("Please select an industry first");
-                    return;
-                  }
-                  setIsGeneratingScript(true);
-                  try {
-                    const prompt = `Generate a professional cold call script for a ${industry} agent. Keep it concise, friendly, and use {{agent_name}} as the placeholder.`;
-                    const response = await supabase.functions.invoke("n8n-proxy", {
-                      body: {
-                        message: prompt,
-                        agent_id: "script-generator",
-                        agent_name: "Genie",
-                        user_id: user?.id,
-                        context: "Generate Script",
-                      },
-                    });
-                    if (response.error) throw new Error(response.error.message || "Could not reach script generator.");
-                    const data = response.data;
-                    const generated = data?.output || data?.message || data?.data || data;
-                    if (generated && typeof generated === "string") {
-                      setScript(generated);
-                      toast.success("Script generated");
-                    } else {
-                      throw new Error("No script text returned by workflow.");
-                    }
-                  } catch (err: any) {
-                    toast.error(`Script generation failed: ${err.message}`);
-                  } finally {
-                    setIsGeneratingScript(false);
-                  }
-                }}
-                disabled={isGeneratingScript}
-              >
-                {isGeneratingScript ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">This text is for planning and testing only. It is not saved to the current `ai_agents` table yet.</p>
+            <ExtraInstructionsField value={form.script} onChange={(v) => set("script", v)} industry={form.industry} userId={user?.id} disabled={!canEditInstructions} />
+            <WelcomeMessageField value={form.welcomeMessage} onChange={(v) => set("welcomeMessage", v)} disabled={!canEditInstructions} />
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-6">
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Logic Provider</Label>
-              <Select value={logicProvider} onValueChange={setLogicProvider}>
-                <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Default AI" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Default Callixis AI</SelectItem>
-                  {activePlugins.map((plugin) => <SelectItem key={plugin.plugin_id} value={plugin.plugin_id}>{plugin.plugin_id}</SelectItem>)}
-                  <SelectItem value="vapi">Vapi AI (Direct)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">This selection is not persisted yet because the current schema does not include a logic provider field.</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Voice Preference</Label>
-              <ScrollArea className="h-[200px] rounded-md border border-border p-2 bg-secondary/30">
-                <div className="grid grid-cols-1 gap-2">
-                  {VOICE_REGISTRY.map((entry) => (
-                    <button key={entry.id} onClick={() => setVoice(entry.id)} className={`p-3 rounded-lg border text-sm text-left transition-all flex items-center justify-between ${voice === entry.id ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xl">{entry.flag}</span>
-                        <div>
-                          <p className="font-bold">{entry.name} <span className="text-[10px] text-muted-foreground uppercase ml-1">({entry.provider})</span></p>
-                          <p className="text-[10px] text-muted-foreground">{entry.desc}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={isSpeaking && activeVoiceId !== entry.voiceId}
-                          className={`h-8 w-8 text-primary hover:bg-primary/10 ${activeVoiceId === entry.voiceId ? "animate-pulse" : ""}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            speakText("Hi, I'm one of the Callixis voices.", entry.voiceId);
-                          }}
-                        >
-                          {activeVoiceId === entry.voiceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-                        </Button>
-                        {voice === entry.id && <Check className="h-4 w-4 text-primary" />}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </ScrollArea>
-            </div>
+            <LogicProviderSelect value={form.logicProvider} onChange={(v) => set("logicProvider", v)} activePlugins={activePlugins} disabled={!canEditVoiceModel} />
+            <VoicePicker voice={form.voice} onSelect={(v) => set("voice", v)} disabled={!canEditVoiceModel} />
           </div>
         )}
 
         {step === 3 && (
           <div className="space-y-4 bg-secondary/30 p-4 rounded-lg border border-border">
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent</span><span className="font-bold">{agentName}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Industry</span><span className="font-bold">{industry}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Agent</span><span className="font-bold">{form.name}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Industry</span><span className="font-bold">{form.industry}</span></div>
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Saved voice</span><span className="font-bold">{selectedVoice?.voiceId || "nova"}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Logic provider</span><span className="font-bold">{form.logicProvider}</span></div>
             <div className="rounded-lg bg-card border border-border p-3 text-xs text-muted-foreground leading-relaxed">
-              Stored now: name, industry, status, model, and voice.
-              Not stored yet: script, logic provider, and rich voice settings.
+              Stored on deploy: name, industry, status, voice, extra instructions, welcome message, logic provider, and voice settings.
             </div>
           </div>
         )}
@@ -361,29 +537,23 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
             <Button onClick={() => setStep(step + 1)} disabled={!canNext()} className="glow-cyan">Next Step</Button>
           ) : (
             <Button
-              disabled={isDeploying}
+              disabled={isDeploying || !hasPermission("agents.deploy")}
               onClick={async () => {
                 if (!user) {
                   toast.error("No user session found.");
                   return;
                 }
-
+                if (isDuplicateAgentName(form.name, existingAgents)) {
+                  toast.error(`An agent named "${form.name.trim()}" already exists.`);
+                  return;
+                }
                 setIsDeploying(true);
                 try {
-                  const { error } = await supabase.from("ai_agents").insert({
-                    user_id: user.id,
-                    name: agentName,
-                    industry,
-                    model: logicProvider === "default" ? "gemini-1.5-pro" : logicProvider,
-                    status: "running",
-                    voice: selectedVoice?.voiceId || "nova",
-                  });
-
-                  if (error) throw error;
+                  await onCreate(form);
                   toast.success("Agent deployed");
                   onClose();
-                } catch (err: any) {
-                  toast.error(`Deployment failed: ${err.message || "Unknown error"}`);
+                } catch (err) {
+                  toast.error(`Deployment failed: ${errorMessage(err) || "Unknown error"}`);
                 } finally {
                   setIsDeploying(false);
                 }
@@ -400,27 +570,129 @@ const AgentWizard = ({ open, onClose, activePlugins, user }: { open: boolean; on
   );
 };
 
-const AIAgents = () => {
-  const { user } = useAuth();
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [activePlugins, setActivePlugins] = useState<any[]>([]);
-  const [testAgent, setTestAgent] = useState<any | null>(null);
-  const [agents, setAgents] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+// Phase 2 §C.7 — reuses the same field components as the wizard (VoicePicker,
+// LogicProviderSelect, ExtraInstructionsField, WelcomeMessageField) so name/industry/instructions/
+// voice/logic provider are all changeable after deploy, without duplicating any of that UI.
+const EditAgentDialog = ({ agent, open, onClose, activePlugins, user, existingAgents, onSave }: {
+  agent: AiAgentRow | null;
+  open: boolean;
+  onClose: () => void;
+  activePlugins: ActivePlugin[];
+  user: User | null;
+  existingAgents: AiAgentRow[];
+  onSave: (id: string, agent: AgentFormValues) => Promise<void>;
+}) => {
+  const { hasPermission } = useAuth();
+  // Permission-overrides plan Phase 4 §H.3 — same two field-level gates as AgentWizard.
+  // Basics (name/industry) has no dedicated sub-permission, so it follows whichever of the two
+  // the user holds — editing an already-deployed agent at all needs at least one of them.
+  const canEditInstructions = hasPermission("agents.prompt_engineering");
+  const canEditVoiceModel = hasPermission("agents.voice_model_config");
+  const canEditAnything = canEditInstructions || canEditVoiceModel;
+  const [form, setForm] = useState<AgentFormValues>(emptyAgentForm());
+  const [isSaving, setIsSaving] = useState(false);
 
-  const loadAgents = useCallback(async () => {
-    if (!user) return;
-    setIsLoading(true);
-    try {
-      const { data, error } = await supabase.from("ai_agents").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-      if (error) throw error;
-      setAgents(data || []);
-    } catch (err: any) {
-      toast.error(`Failed to load agents: ${err.message}`);
-    } finally {
-      setIsLoading(false);
+  useEffect(() => {
+    if (agent) {
+      setForm({
+        name: agent.name,
+        industry: agent.industry || "",
+        script: agent.script || "",
+        welcomeMessage: agent.welcome_message || "",
+        voice: VOICE_REGISTRY.find((v) => v.voiceId === agent.voice)?.id || "eleven-sarah",
+        logicProvider: agent.logic_provider || "default",
+      });
     }
-  }, [user]);
+  }, [agent]);
+
+  const set = <K extends keyof AgentFormValues>(key: K, value: AgentFormValues[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  if (!agent) return null;
+  const isDuplicate = isDuplicateAgentName(form.name, existingAgents, agent.id);
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="bg-card border-border max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-foreground flex items-center gap-2 font-display text-xl"><Pencil className="h-5 w-5 text-primary" /> Edit {agent.name}</DialogTitle>
+          <DialogDescription>Changes save immediately to the agent's live record.</DialogDescription>
+        </DialogHeader>
+
+        {!canEditAnything && (
+          <p className="text-xs text-muted-foreground bg-secondary/20 rounded-lg border border-border p-3 mb-2">
+            You can view this agent's configuration, but changing it needs the AI Agents —
+            Prompt Engineering or Voice/Model Config permission.
+          </p>
+        )}
+
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Agent Name</Label>
+              <Input value={form.name} onChange={(event) => set("name", event.target.value)} className="bg-secondary/50 border-border" disabled={!canEditAnything} />
+              {isDuplicate && <p className="text-xs text-destructive">An agent named "{form.name.trim()}" already exists.</p>}
+            </div>
+            <div className="space-y-2">
+              <Label>Industry</Label>
+              <Select value={form.industry} onValueChange={(v) => set("industry", v)} disabled={!canEditAnything}>
+                <SelectTrigger className="bg-secondary/50 border-border"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>{INDUSTRIES.map((entry) => <SelectItem key={entry} value={entry}>{entry}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <ExtraInstructionsField value={form.script} onChange={(v) => set("script", v)} industry={form.industry} userId={user?.id} disabled={!canEditInstructions} />
+          <WelcomeMessageField value={form.welcomeMessage} onChange={(v) => set("welcomeMessage", v)} disabled={!canEditInstructions} />
+          <LogicProviderSelect value={form.logicProvider} onChange={(v) => set("logicProvider", v)} activePlugins={activePlugins} disabled={!canEditVoiceModel} />
+          <VoicePicker voice={form.voice} onSelect={(v) => set("voice", v)} disabled={!canEditVoiceModel} />
+        </div>
+
+        <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-border">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={isSaving || !form.name.trim() || !form.industry || isDuplicate || !canEditAnything}
+            className="glow-cyan"
+            onClick={async () => {
+              setIsSaving(true);
+              try {
+                await onSave(agent.id, form);
+                toast.success("Agent updated");
+                onClose();
+              } catch (err) {
+                toast.error(`Update failed: ${errorMessage(err)}`);
+              } finally {
+                setIsSaving(false);
+              }
+            }}
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            {isSaving ? "Saving..." : "Save Changes"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const AIAgents = () => {
+  const { user, hasPermission } = useAuth();
+  // Permission-overrides plan Phase 4 §H.3 (docs/permission-overrides-plan/README.md).
+  const canDeploy = hasPermission("agents.deploy");
+  const canChatTest = hasPermission("agents.chat_testing"); // any level: "see the panel" (D-3)
+  const canEditAgent = hasPermission("agents.prompt_engineering") || hasPermission("agents.voice_model_config");
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [activePlugins, setActivePlugins] = useState<ActivePlugin[]>([]);
+  const [testAgent, setTestAgent] = useState<DisplayAgent | null>(null);
+  const [editAgent, setEditAgent] = useState<AiAgentRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AiAgentRow | null>(null);
+  const [expandedScriptId, setExpandedScriptId] = useState<string | null>(null);
+
+  // Phase 2 §C.10-C.13 — TanStack Query via useAgents(), replacing the page's own raw
+  // useState/useEffect/loadAgents callback. §C.11 — `agents` is read directly (no `= []`
+  // destructure default) and defaulted only inside the stable useMemo below, per CLAUDE.md's
+  // 2026-08-31 "/call-center" lesson: a fresh `[]` on every render would re-run this memo and
+  // anything depending on it every single render.
+  const { agents, isLoading, createAgent, updateAgent, deleteAgent } = useAgents();
 
   useEffect(() => {
     const loadPlugins = async () => {
@@ -434,15 +706,52 @@ const AIAgents = () => {
     };
 
     loadPlugins();
-    loadAgents();
-  }, [user, loadAgents]);
+  }, [user]);
 
-  const displayedAgents = agents.map((agent) => ({
-    ...agent,
-    displayStatus: agent.status?.toLowerCase() || "idle",
-    calls: "Linked to live campaign data",
-    successRate: `${Math.max(0, Math.min(100, agent.status === "running" ? 18 : 0))}%`,
-  }));
+  const displayedAgents = useMemo<DisplayAgent[]>(() => {
+    const rows = agents ?? [];
+    return rows.map((agent) => ({
+      ...agent,
+      displayStatus: agent.status?.toLowerCase() || "idle",
+    }));
+  }, [agents]);
+
+  const handleCreate = async (form: AgentFormValues) => {
+    const selectedVoice = VOICE_REGISTRY.find((entry) => entry.id === form.voice);
+    await createAgent({
+      name: form.name,
+      industry: form.industry,
+      model: DEFAULT_MODEL,
+      status: "running",
+      voice: selectedVoice?.voiceId || "nova",
+      script: form.script || null,
+      welcome_message: form.welcomeMessage || null,
+      logic_provider: form.logicProvider,
+      voice_settings: selectedVoice
+        ? { provider: selectedVoice.provider, voiceId: selectedVoice.voiceId, language: selectedVoice.language }
+        : null,
+    });
+  };
+
+  const handleSaveEdit = async (id: string, form: AgentFormValues) => {
+    const selectedVoice = VOICE_REGISTRY.find((entry) => entry.id === form.voice);
+    // §C.14 — `model` is deliberately absent here: it no longer tracks logic provider, and this
+    // page has no dedicated model picker yet, so an edit leaves the stored value untouched.
+    await updateAgent({
+      id,
+      updates: {
+        name: form.name,
+        industry: form.industry,
+        voice: selectedVoice?.voiceId || "nova",
+        script: form.script || null,
+        welcome_message: form.welcomeMessage || null,
+        logic_provider: form.logicProvider,
+        voice_settings: selectedVoice
+          ? { provider: selectedVoice.provider, voiceId: selectedVoice.voiceId, language: selectedVoice.language }
+          : null,
+      },
+    });
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -451,14 +760,14 @@ const AIAgents = () => {
           <h1 className="text-2xl font-display text-foreground font-bold tracking-tight">AI Agents</h1>
           <p className="text-sm text-muted-foreground mt-1">Deploy and manage agents backed by the actual `ai_agents` table.</p>
         </div>
-        <Button className="glow-cyan h-10 px-5 font-bold" onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
+        <Button className="glow-cyan h-10 px-5 font-bold" disabled={!canDeploy} title={canDeploy ? undefined : "Needs the AI Agents — Deploy New Agents permission"} onClick={() => setWizardOpen(true)}><Plus className="h-4 w-4 mr-2" />Deploy Agent</Button>
       </div>
 
       <Card className="bg-card border-border p-4 text-xs text-muted-foreground leading-relaxed">
-        This page now only promises what is real. Agents persist correctly to the database, but advanced script storage, voice settings objects, and logic-provider wiring still need backend/schema work.
+        Agents persist fully to the database, including instructions, logic provider, and voice settings.
       </Card>
 
-      {isLoading && agents.length === 0 ? (
+      {isLoading && displayedAgents.length === 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {[1, 2, 3].map((index) => (
             <Card key={index} className="bg-card border-border p-5 h-[160px] flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary/20" /></Card>
@@ -480,25 +789,59 @@ const AIAgents = () => {
               </div>
 
               <div className="space-y-2 text-xs text-muted-foreground">
-                <div className="flex items-center justify-between"><span>Model</span><span className="text-foreground">{agent.model}</span></div>
                 <div className="flex items-center justify-between"><span>Voice</span><span className="text-foreground font-mono">{agent.voice}</span></div>
+                <div className="flex items-center justify-between"><span>Logic Provider</span><span className="text-foreground">{agent.logic_provider || "default"}</span></div>
                 <div className="flex items-center justify-between"><span>Created</span><span className="text-foreground">{new Date(agent.created_at).toLocaleDateString()}</span></div>
               </div>
 
+              {/* §C.8 — script/welcome_message used to be invisible once saved. */}
+              {(agent.script || agent.welcome_message) && (
+                <div className="mt-3 pt-3 border-t border-border/50">
+                  <button
+                    type="button"
+                    className="text-[10px] font-bold uppercase tracking-wider text-primary hover:underline"
+                    onClick={() => setExpandedScriptId(expandedScriptId === agent.id ? null : agent.id)}
+                  >
+                    {expandedScriptId === agent.id ? "Hide details" : `View ${EXTRA_INSTRUCTIONS_LABEL.toLowerCase()}`}
+                  </button>
+                  {expandedScriptId === agent.id && (
+                    <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                      {agent.welcome_message && <p><span className="text-foreground font-medium">Welcome:</span> {agent.welcome_message}</p>}
+                      {agent.script && <p className="whitespace-pre-wrap"><span className="text-foreground font-medium">{EXTRA_INSTRUCTIONS_LABEL}:</span> {agent.script}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="mt-6 pt-4 border-t border-border/50 flex justify-between items-center">
-                <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
+                {/* agents.chat_testing (any level) gates seeing the panel at all — D-3: "view:
+                    See the Chat Test panel." Whether a test can actually be RUN is a second,
+                    stricter gate inside TestChatDialog itself (requires `full`). */}
+                {canChatTest ? (
+                  <Button variant="outline" size="sm" onClick={() => setTestAgent(agent)} className="h-8 text-[10px] gap-1 font-bold border-primary/20 text-primary hover:bg-primary/5 uppercase tracking-wider"><MessageSquare className="h-3 w-3" /> Chat Test</Button>
+                ) : <span />}
                 <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={!canEditAgent}
+                    className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"
+                    title={canEditAgent ? "Edit agent" : "Needs the Prompt Engineering or Voice/Model Config permission"}
+                    onClick={() => setEditAgent(agent)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors"
                     onClick={async () => {
                       const nextStatus = agent.displayStatus === "running" ? "paused" : "running";
-                      const { error } = await supabase.from("ai_agents").update({ status: nextStatus }).eq("id", agent.id);
-                      if (error) toast.error(error.message);
-                      else {
+                      try {
+                        await updateAgent({ id: agent.id, updates: { status: nextStatus } });
                         toast.success(`Agent ${nextStatus}`);
-                        loadAgents();
+                      } catch (err) {
+                        toast.error(errorMessage(err));
                       }
                     }}
                   >
@@ -508,17 +851,7 @@ const AIAgents = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-muted-foreground hover:text-destructive transition-colors"
-                    onClick={async () => {
-                      if (!confirm("Are you sure you want to delete this agent?")) return;
-                      try {
-                        const { error } = await supabase.from("ai_agents").delete().eq("id", agent.id);
-                        if (error) throw error;
-                        toast.success("Agent deleted");
-                        loadAgents();
-                      } catch (err: any) {
-                        toast.error(err.message);
-                      }
-                    }}
+                    onClick={() => setDeleteTarget(agent)}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -537,8 +870,24 @@ const AIAgents = () => {
         </div>
       )}
 
-      <AgentWizard open={wizardOpen} onClose={() => { setWizardOpen(false); loadAgents(); }} activePlugins={activePlugins} user={user} />
+      <AgentWizard open={wizardOpen} onClose={() => setWizardOpen(false)} activePlugins={activePlugins} user={user} existingAgents={agents ?? []} onCreate={handleCreate} />
+      <EditAgentDialog agent={editAgent} open={!!editAgent} onClose={() => setEditAgent(null)} activePlugins={activePlugins} user={user} existingAgents={agents ?? []} onSave={handleSaveEdit} />
       {testAgent && <TestChatDialog agent={testAgent} open={!!testAgent} onClose={() => setTestAgent(null)} />}
+
+      {/* §B.13 — replaces the old `window.confirm(...)`. */}
+      <ConfirmActionDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete this agent?"
+        description={deleteTarget ? `"${deleteTarget.name}" will be permanently deleted. Any campaign linked to it will fall back to "Unassigned."` : ""}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await deleteAgent(deleteTarget.id);
+          toast.success("Agent deleted");
+        }}
+      />
     </div>
   );
 };

@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { useCampaigns } from "@/hooks/useCampaigns";
+import { DISPLAY_STATUS_LABEL, type DisplayStatus } from "@/lib/callPipeline";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   addDays,
   format,
@@ -56,7 +58,7 @@ interface CalendarEvent {
   campaignName: string;
   summary: string;
   duration: string;
-  status: string;
+  status: DisplayStatus;
 }
 
 const typeStyles: Record<EventType, string> = {
@@ -94,7 +96,15 @@ const geoLabelForPhone = (phone: string) => {
 const formatDuration = (duration?: string) => duration && duration !== "0:00" ? duration : "Not recorded";
 
 export default function CalendarScheduling() {
-  const { campaigns = [], isLoading } = useCampaigns();
+  // Permission-overrides plan Phase 4 §H.5 (docs/permission-overrides-plan/README.md) —
+  // calendar.schedule_sync's "See the calendar" half (D-3) gates this whole page; its "cannot
+  // schedule or trigger a sync" half has no matching write action anywhere here yet — there is
+  // no create-event/trigger-sync control on this page at all, same "seeded ahead of the
+  // feature" pattern as reports.export. Wire that half the day a real one exists.
+  const { hasPermission } = useAuth();
+  const canViewCalendar = hasPermission("calendar.schedule_sync");
+  // C.16/E14 — not defaulted in the destructure; see Finance.tsx's identical comment.
+  const { campaigns, isLoading } = useCampaigns();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [filterAgent, setFilterAgent] = useState<string>("all");
@@ -103,17 +113,21 @@ export default function CalendarScheduling() {
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
 
   const events = useMemo<CalendarEvent[]>(() => {
-    return campaigns.flatMap((campaign) =>
+    return (campaigns ?? []).flatMap((campaign) =>
       campaign.records
         .filter((record) => record.callDate && record.callDate !== "—")
         .map((record) => {
           const phone = record.phone || "";
-          const isQualified = ["completed", "callback"].includes(record.status);
+          // E12 — the only dead-status read on this page: "callback" as a call_records status was
+          // never written (E3); a completed call is the real signal an appointment happened. The
+          // EventType union below ("callback" | "appointment") is a *different* concept — the
+          // calendar's own Follow-up/Qualified split — and stays untouched.
+          const isQualified = record.status === "completed";
           const eventDate = new Date(record.callDate.replace(" ", "T"));
 
           return {
             id: record.id,
-            type: isQualified ? "appointment" : "callback",
+            type: (isQualified ? "appointment" : "callback") as EventType,
             date: eventDate,
             time: format(eventDate, "p"),
             agentName: record.agent || campaign.agent,
@@ -122,7 +136,7 @@ export default function CalendarScheduling() {
             geo: geoLabelForPhone(phone),
             geoFlag: geoFlagForPhone(phone),
             campaignName: campaign.name,
-            summary: record.notes || `${record.status} call for ${campaign.name}`,
+            summary: record.notes || `${DISPLAY_STATUS_LABEL[record.status]} call for ${campaign.name}`,
             duration: record.duration,
             status: record.status,
           };
@@ -166,6 +180,14 @@ export default function CalendarScheduling() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading live schedule...</div>;
+  }
+
+  if (!canViewCalendar) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Viewing the calendar needs the Calendar — Schedule/Sync permission.
+      </div>
+    );
   }
 
   return (
@@ -380,7 +402,7 @@ export default function CalendarScheduling() {
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Stored Status</span>
-                  <span className="text-sm text-foreground font-medium capitalize">{detailEvent.status}</span>
+                  <span className="text-sm text-foreground font-medium">{DISPLAY_STATUS_LABEL[detailEvent.status]}</span>
                 </div>
 
                 <Separator className="bg-border" />

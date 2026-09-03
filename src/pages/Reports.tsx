@@ -1,9 +1,19 @@
 import { useMemo, useState } from "react";
-import { BarChart3, TrendingUp, Phone, Users, DollarSign, ArrowUpRight, ArrowDownRight, Bot } from "lucide-react";
+import { TrendingUp, Phone, Users, DollarSign, ArrowUpRight, ArrowDownRight, Bot } from "lucide-react";
 import { TimeframeFilter, type TimeframePreset } from "@/components/TimeframeFilter";
 import { useDashboardStats } from "@/hooks/useDashboardStats";
 import { useCampaigns } from "@/hooks/useCampaigns";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
+import { formatPercent } from "@/lib/callPipeline";
+import { resolveTimeframeRange } from "@/lib/timeframe";
+import { useAuth } from "@/contexts/AuthContext";
+
+// Permission-overrides plan Phase 4 §H.5 (docs/permission-overrides-plan/README.md) —
+// reports.export ("Export CSV/Excel") is seeded (every holder at `view` or `full`) but there is
+// genuinely no export button anywhere on this page to gate — recorded here rather than forced
+// onto something else. D-3's own concrete table already anticipated this ("Export button
+// disabled" implies a button that doesn't exist yet). Wire it the day a real export feature is
+// built, not before.
 
 const tooltipStyle = {
   backgroundColor: "hsl(220, 18%, 10%)",
@@ -21,33 +31,46 @@ const formatCurrencyCompact = (value: number) =>
   }).format(value);
 
 const Reports = () => {
+  // reports.analytics_dashboard — every role that reaches this page already holds it (it's the
+  // key the page-level `reports` grant is synthesized from for every one of them), so this is
+  // structurally correct rather than newly restrictive; see the file header re: reports.export.
+  const { hasPermission } = useAuth();
+  const canViewAnalytics = hasPermission("reports.analytics_dashboard");
   const [timeframe, setTimeframe] = useState<TimeframePreset>("30d");
   const [customRange, setCustomRange] = useState<{ from?: Date; to?: Date }>({});
-  const { data, isLoading } = useDashboardStats();
-  const { campaigns = [], isLoading: campaignsLoading } = useCampaigns();
+  // D.9 — wired to real call-attempt filtering, same as Dashboard.tsx.
+  const timeframeRange = useMemo(() => resolveTimeframeRange(timeframe, customRange), [timeframe, customRange]);
+  const { data, isLoading } = useDashboardStats(timeframeRange);
+  // C.16/E14 — not defaulted in the destructure; see Finance.tsx's identical comment.
+  const { campaigns, isLoading: campaignsLoading } = useCampaigns();
 
   const campaignPerformance = useMemo(
-    () => campaigns.map((campaign) => {
+    () => (campaigns ?? []).map((campaign) => {
       const converted = campaign.records.filter((record) => record.status === "completed").length;
       return {
         name: campaign.name,
         leads: campaign.records.length,
         converted,
-        rate: Number(campaign.conversion.replace("%", "")) || 0,
+        rate: campaign.connectRate,
         budget: campaign.budget,
       };
     }).sort((a, b) => b.leads - a.leads),
     [campaigns]
   );
 
+  // C.4/C.5 — the dead "Callback"/"Voicemail" call_records statuses (E3: never written, only
+  // ever branched on) are gone; "Pending" is replaced by the three real pre-attempt buckets, and
+  // "Excluded"/"Unattributed" (the counting model's own two non-attempt outcomes) are now shown
+  // rather than silently folded into "Failed".
   const outcomeData = useMemo(() => {
-    const allRecords = campaigns.flatMap((campaign) => campaign.records);
+    const allRecords = (campaigns ?? []).flatMap((campaign) => campaign.records);
     return [
-      { name: "Converted", value: allRecords.filter((record) => record.status === "completed").length, color: "hsl(170, 100%, 45%)" },
-      { name: "Callback", value: allRecords.filter((record) => record.status === "callback").length, color: "hsl(200, 80%, 55%)" },
+      { name: "Completed", value: allRecords.filter((record) => record.status === "completed").length, color: "hsl(170, 100%, 45%)" },
       { name: "No Answer", value: allRecords.filter((record) => record.status === "no-answer").length, color: "hsl(220, 14%, 30%)" },
-      { name: "Pending", value: allRecords.filter((record) => ["pending", "in-progress"].includes(record.status)).length, color: "hsl(45, 93%, 47%)" },
-      { name: "Failed", value: allRecords.filter((record) => ["failed", "voicemail"].includes(record.status)).length, color: "hsl(0, 72%, 51%)" },
+      { name: "Failed", value: allRecords.filter((record) => record.status === "failed").length, color: "hsl(0, 72%, 51%)" },
+      { name: "In Pipeline", value: allRecords.filter((record) => ["queued", "dialing", "stalled"].includes(record.status)).length, color: "hsl(45, 93%, 47%)" },
+      { name: "Excluded", value: allRecords.filter((record) => record.status === "excluded").length, color: "hsl(220, 9%, 46%)" },
+      { name: "Unattributed", value: allRecords.filter((record) => record.status === "unattributed").length, color: "hsl(280, 20%, 55%)" },
     ].filter((item) => item.value > 0);
   }, [campaigns]);
 
@@ -59,8 +82,16 @@ const Reports = () => {
     return <div className="p-8 text-center text-muted-foreground">Unable to load reporting data.</div>;
   }
 
+  if (!canViewAnalytics) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Viewing analytics needs the Reports — Analytics Dashboard permission.
+      </div>
+    );
+  }
+
   const { stats, callData, agentPerformance } = data;
-  const totalQualifiedLeads = campaigns.reduce((sum, campaign) => sum + campaign.qualifiedLeadsSent, 0);
+  const totalQualifiedLeads = (campaigns ?? []).reduce((sum, campaign) => sum + campaign.qualifiedLeadsSent, 0);
 
   return (
     <div className="space-y-6">
@@ -81,7 +112,7 @@ const Reports = () => {
         {[
           { label: "Total Calls", value: stats.totalCalls.toLocaleString(), change: `${stats.activeCampaignsCount} active campaigns`, up: true, icon: Phone },
           { label: "Qualified Leads", value: totalQualifiedLeads.toLocaleString(), change: `${stats.activeLeads} marked active`, up: true, icon: Users },
-          { label: "Conversion Rate", value: `${stats.conversion}%`, change: `${campaigns.length} tracked campaigns`, up: true, icon: TrendingUp },
+          { label: "Conversion Rate", value: formatPercent(stats.conversion), change: `${(campaigns ?? []).length} tracked campaigns`, up: true, icon: TrendingUp },
           { label: "Revenue", value: formatCurrencyCompact(stats.revenue), change: `${stats.aiAgentsCount} active agents`, up: true, icon: DollarSign },
         ].map((kpi) => (
           <div key={kpi.label} className="bg-card rounded-xl border border-border p-4">

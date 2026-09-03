@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +68,8 @@ const geoFilters = ["All", "US", "UK", "EU", "Canada", "Australia"];
 
 const formatCurrency = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 const getCountdown = (iso: string) => {
   const diff = new Date(iso).getTime() - Date.now();
   if (diff <= 0) return "Expired";
@@ -80,6 +82,15 @@ const getCountdown = (iso: string) => {
   return `${minutes}m`;
 };
 
+// Permission-overrides plan Phase 4 §H.4 (docs/permission-overrides-plan/README.md) —
+// marketplace.approve_listings and marketplace.purchase_plugins are seeded (both `medium`,
+// held by several roles) but neither maps to anything this page actually does: there is no
+// listing-approval step anywhere (a bid becomes "matched" automatically when it meets the ask,
+// never via a manual approve action — see placeDeskBid below), and this page is a peer-to-peer
+// lead-deal marketplace, not a plugin store (that's Plugins.tsx, gated on the unrelated
+// `plugins` page permission). Recorded here rather than bent onto "Open Auction"/"Submit
+// Offer" — forcing a fit would misrepresent what the permission means. Same pattern as
+// SettingsPage.tsx's system_configuration/api_integrations note.
 const Marketplace = () => {
   const { user, profile, role } = useAuth();
   const [side, setSide] = useState<"affiliate" | "desk">("affiliate");
@@ -157,8 +168,8 @@ const Marketplace = () => {
 
         setAffiliateDeals(deals);
         setDeskOffers(formattedOffers);
-      } catch (err: any) {
-        toast.error(`Failed to load marketplace: ${err.message || "unknown error"}`);
+      } catch (err) {
+        toast.error(`Failed to load marketplace: ${errorMessage(err) || "unknown error"}`);
       } finally {
         setLoading(false);
       }
@@ -236,8 +247,8 @@ const Marketplace = () => {
       setNewDeal({ geo: "", source: "", funnel: "", price: "", terms: "CPL", conversionRate: "", bidExpiryHours: "24", leadVolume: "", notes: "" });
       setNewDealOpen(false);
       toast.success("Deal opened for bidding.");
-    } catch (err: any) {
-      toast.error(`Could not create deal: ${err.message || "unknown error"}`);
+    } catch (err) {
+      toast.error(`Could not create deal: ${errorMessage(err) || "unknown error"}`);
     }
   };
 
@@ -302,8 +313,8 @@ const Marketplace = () => {
       setBidDialog(null);
       setBidPrice("");
       setBidQuantity("");
-    } catch (err: any) {
-      toast.error(`Could not place bid: ${err.message || "unknown error"}`);
+    } catch (err) {
+      toast.error(`Could not place bid: ${errorMessage(err) || "unknown error"}`);
     }
   };
 

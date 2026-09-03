@@ -3,22 +3,21 @@ import {
   Headphones,
   PhoneCall,
   Clock,
-  MapPin,
-  User,
   Bot,
   Play,
   Pause,
   History,
-  Phone,
   CheckCircle,
   XCircle,
   PhoneOff,
+  AlertTriangle,
+  Ban,
+  HelpCircle,
   Activity,
   Eye,
   Bell,
   PhoneIncoming,
   UserCheck,
-  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,8 +26,18 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useCampaigns } from "@/hooks/useCampaigns";
+import { useNow } from "@/hooks/useNow";
+import { DISPLAY_STATUS_LABEL, STUCK_CALL_MINUTES, type DisplayStatus } from "@/lib/callPipeline";
+import { useAuth } from "@/contexts/AuthContext";
 
-interface LiveCall {
+// The three "hasn't been resolved yet" buckets — a lead here either hasn't been dialed, is being
+// dialed right now, or was claimed but the dispatcher's own 30-minute sweep window has passed
+// with no result. Everything else (a real attempt outcome, excluded, or unattributed debris) is a
+// resolved/stored call instead. Replaces the old fake "active"/"ringing"/"hold" vocabulary, which
+// was never derived from real data (docs/counting-model-plan/README.md — "Why this exists").
+const PRE_ATTEMPT_STATUSES: DisplayStatus[] = ["queued", "dialing", "stalled"];
+
+interface PipelineCall {
   id: string;
   agentName: string;
   leadId: string;
@@ -37,12 +46,13 @@ interface LiveCall {
   geoFlag: string;
   campaign: string;
   duration: string;
-  status: "active" | "ringing" | "hold";
+  status: DisplayStatus; // queued | dialing | stalled
+  lastCalledAt: string | null;
   queue: string;
   notes: string;
 }
 
-interface CompletedCall {
+interface StoredCall {
   id: string;
   agentName: string;
   leadId: string;
@@ -52,7 +62,7 @@ interface CompletedCall {
   campaign: string;
   duration: string;
   date: string;
-  outcome: "converted" | "callback" | "no-answer" | "rejected";
+  status: DisplayStatus; // completed | no-answer | failed | excluded | unattributed
   queue: string;
   notes: string;
 }
@@ -87,6 +97,43 @@ const geoLabelForPhone = (phone: string) => {
   return "Unknown region";
 };
 
+// Dot/badge colour per pipeline state — dialing is the only one actually happening right now.
+const PIPELINE_DOT_CLASS: Record<"queued" | "dialing" | "stalled", string> = {
+  dialing: "bg-green-500",
+  stalled: "bg-orange-500",
+  queued: "bg-yellow-500",
+};
+
+const PIPELINE_BADGE_CLASS: Record<"queued" | "dialing" | "stalled", string> = {
+  dialing: "bg-green-500/10 text-green-500 border-green-500/20",
+  stalled: "bg-orange-500/10 text-orange-500 border-orange-500/20",
+  queued: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+};
+
+const STORED_CALL_ICON: Record<DisplayStatus, React.ElementType> = {
+  completed: CheckCircle,
+  "no-answer": PhoneOff,
+  failed: XCircle,
+  excluded: Ban,
+  unattributed: HelpCircle,
+  queued: Clock,
+  dialing: Play,
+  stalled: AlertTriangle,
+};
+
+const STORED_CALL_BADGE_CLASS: Record<DisplayStatus, string> = {
+  completed: "bg-green-500/10 text-green-500 border-green-500/20",
+  "no-answer": "bg-muted text-muted-foreground border-border",
+  failed: "bg-destructive/10 text-destructive border-destructive/20",
+  excluded: "bg-muted text-muted-foreground border-border",
+  unattributed: "bg-muted text-muted-foreground border-border",
+  queued: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+  dialing: "bg-green-500/10 text-green-500 border-green-500/20",
+  stalled: "bg-orange-500/10 text-orange-500 border-orange-500/20",
+};
+
+const STORED_CALL_FILTERS: DisplayStatus[] = ["completed", "no-answer", "failed", "excluded", "unattributed"];
+
 function StatPill({ icon: Icon, value, label, accent = false }: { icon: React.ElementType; value: string | number; label: string; accent?: boolean }) {
   return (
     <div className={`flex items-center gap-3 rounded-xl px-4 py-3 border transition-colors ${accent ? "border-primary/30 bg-primary/5" : "border-border bg-card"}`}>
@@ -101,8 +148,8 @@ function StatPill({ icon: Icon, value, label, accent = false }: { icon: React.El
   );
 }
 
-function LiveCallRow({ call, onSelect, isSelected }: { call: LiveCall; onSelect: (id: string) => void; isSelected: boolean }) {
-  const statusDot = call.status === "active" ? "bg-green-500" : call.status === "ringing" ? "bg-yellow-500" : "bg-orange-500";
+function PipelineCallRow({ call, onSelect, isSelected }: { call: PipelineCall; onSelect: (id: string) => void; isSelected: boolean }) {
+  const statusDot = PIPELINE_DOT_CLASS[call.status as "queued" | "dialing" | "stalled"];
 
   return (
     <div
@@ -111,7 +158,7 @@ function LiveCallRow({ call, onSelect, isSelected }: { call: LiveCall; onSelect:
     >
       <div className="relative">
         <div className={`h-2 w-2 rounded-full ${statusDot}`} />
-        {call.status === "active" && <div className={`absolute inset-0 h-2 w-2 rounded-full ${statusDot} animate-ping opacity-40`} />}
+        {call.status === "dialing" && <div className={`absolute inset-0 h-2 w-2 rounded-full ${statusDot} animate-ping opacity-40`} />}
       </div>
       <div className="flex items-center gap-2 w-32 shrink-0">
         <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center"><Bot className="h-3.5 w-3.5 text-primary" /></div>
@@ -129,18 +176,24 @@ function LiveCallRow({ call, onSelect, isSelected }: { call: LiveCall; onSelect:
       </div>
       <div className="hidden lg:block text-xs text-muted-foreground w-32 shrink-0 truncate">{call.campaign}</div>
       <Badge variant="outline" className="font-mono text-[10px] shrink-0">{call.duration}</Badge>
-      <Badge
-        className={`text-[10px] capitalize shrink-0 ${call.status === "active" ? "bg-green-500/10 text-green-500 border-green-500/20" : call.status === "ringing" ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" : "bg-orange-500/10 text-orange-500 border-orange-500/20"}`}
-        variant="outline"
-      >
-        {call.status}
+      <Badge className={`text-[10px] shrink-0 ${PIPELINE_BADGE_CLASS[call.status as "queued" | "dialing" | "stalled"]}`} variant="outline">
+        {DISPLAY_STATUS_LABEL[call.status]}
       </Badge>
       <Eye className="h-4 w-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0" />
     </div>
   );
 }
 
-function ExpandedCallPanel({ call }: { call: LiveCall }) {
+// D.5 — real elapsed time against the dispatcher's own 30-minute stuck-call window, not the old
+// hardcoded 70/45/15. A queued lead hasn't started a call yet, so its progress is 0 regardless of
+// how long it's been waiting in the queue (that's not "call progress").
+function pipelineProgress(call: PipelineCall, now: number): number {
+  if (call.status === "queued" || !call.lastCalledAt) return 0;
+  const elapsedMinutes = (now - new Date(call.lastCalledAt).getTime()) / 60_000;
+  return Math.max(0, Math.min(100, Math.round((elapsedMinutes / STUCK_CALL_MINUTES) * 100)));
+}
+
+function ExpandedCallPanel({ call, now }: { call: PipelineCall; now: number }) {
   return (
     <div className="rounded-xl border border-primary/20 bg-card overflow-hidden shadow-lg shadow-primary/5 animate-in slide-in-from-top-2 duration-200">
       <div className="flex items-center justify-between px-4 py-2.5 bg-primary/5 border-b border-primary/10">
@@ -186,11 +239,11 @@ function ExpandedCallPanel({ call }: { call: LiveCall }) {
         </div>
         <div className="p-4 space-y-4">
           <div className="flex items-center gap-2 text-sm text-foreground"><Activity className="h-4 w-4 text-primary" /> Current call progress</div>
-          <Progress value={call.status === "active" ? 70 : call.status === "hold" ? 45 : 15} className="h-2" />
+          <Progress value={pipelineProgress(call, now)} className="h-2" />
           <div className="grid grid-cols-3 gap-3 text-xs">
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-muted-foreground">Status</p>
-              <p className="text-foreground font-medium capitalize mt-1">{call.status}</p>
+              <p className="text-foreground font-medium mt-1">{DISPLAY_STATUS_LABEL[call.status]}</p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-muted-foreground">Duration</p>
@@ -210,14 +263,8 @@ function ExpandedCallPanel({ call }: { call: LiveCall }) {
   );
 }
 
-function RecordingDetail({ call, onClose }: { call: CompletedCall; onClose: () => void }) {
-  const outcomeIcon = call.outcome === "converted"
-    ? <CheckCircle className="h-4 w-4 text-green-500" />
-    : call.outcome === "callback"
-      ? <Phone className="h-4 w-4 text-primary" />
-      : call.outcome === "no-answer"
-        ? <PhoneOff className="h-4 w-4 text-muted-foreground" />
-        : <XCircle className="h-4 w-4 text-destructive" />;
+function RecordingDetail({ call, onClose }: { call: StoredCall; onClose: () => void }) {
+  const OutcomeIcon = STORED_CALL_ICON[call.status];
 
   return (
     <Dialog open={!!call} onOpenChange={(open) => !open && onClose()}>
@@ -247,7 +294,7 @@ function RecordingDetail({ call, onClose }: { call: CompletedCall; onClose: () =
             </div>
           </div>
           <div className="flex items-center justify-between rounded-lg border border-border p-3">
-            <div className="flex items-center gap-2">{outcomeIcon}<span className="text-sm text-foreground capitalize">{call.outcome}</span></div>
+            <div className="flex items-center gap-2"><OutcomeIcon className="h-4 w-4 text-muted-foreground" /><span className="text-sm text-foreground">{DISPLAY_STATUS_LABEL[call.status]}</span></div>
             <span className="text-xs text-muted-foreground">{call.date}</span>
           </div>
           <div className="rounded-lg bg-muted/30 border border-border p-4">
@@ -261,32 +308,39 @@ function RecordingDetail({ call, onClose }: { call: CompletedCall; onClose: () =
 }
 
 const CallCenter = () => {
-  const { campaigns = [], isLoading } = useCampaigns();
+  // Deliberately not defaulted in the destructure: useCampaigns returns `data`, which is
+  // undefined until the query resolves, so `campaigns = []` would mint a fresh array on every
+  // render and invalidate every useMemo below it each time. Default inside the memo instead.
+  const { campaigns, isLoading, isFetching, dataUpdatedAt } = useCampaigns();
+  // Permission-overrides plan Phase 4 §H.4 (docs/permission-overrides-plan/README.md) —
+  // callcenter.live_dashboard: "read-only by nature" (D-3), so presence is the whole gate;
+  // there's no write action on this tab to distinguish view from full.
+  const { hasPermission } = useAuth();
+  const canViewLiveDashboard = hasPermission("callcenter.live_dashboard");
+  const now = useNow();
   const [filterQueue, setFilterQueue] = useState<string>("all");
   const [selectedCall, setSelectedCall] = useState<string | null>(null);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   const [recordingFilter, setRecordingFilter] = useState<string>("all");
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  const { liveCalls, completedCalls, queues } = useMemo(() => {
-    const allRecords = campaigns.flatMap((campaign) =>
+  const { pipelineCalls, storedCalls, queues } = useMemo(() => {
+    const allRecords = (campaigns ?? []).flatMap((campaign) =>
       campaign.records.map((record) => ({ campaign, record }))
     );
 
-    const queueNameForCampaign = (campaignName: string) => {
-      const name = campaignName.toLowerCase();
-      if (name.includes("support")) return "Support";
-      if (name.includes("billing") || name.includes("finance")) return "Billing";
-      if (name.includes("service")) return "Customer Service";
-      return "Sales";
-    };
+    // D.7 — real campaign grouping: campaigns.industry (a real column, already shown elsewhere on
+    // the Campaigns page) replaces the old keyword guess against the campaign's name string.
+    const queueNameForCampaign = (campaign: { industry: string }) => campaign.industry || "General";
 
-    const currentCalls: LiveCall[] = allRecords
-      .filter(({ record }) => ["pending", "in-progress", "callback"].includes(record.status))
-      .slice(0, 8)
+    const currentCalls: PipelineCall[] = allRecords
+      .filter(({ record }) => PRE_ATTEMPT_STATUSES.includes(record.status))
+      // D.8 — sorted by real recency (most recently touched first; never-touched queued leads
+      // sort last), no cap: the ScrollArea below carries the list instead of silently hiding
+      // anything past the 8th row.
+      .sort((a, b) => (b.record.lastCalledAt ?? "").localeCompare(a.record.lastCalledAt ?? ""))
       .map(({ campaign, record }) => {
-        const queue = queueNameForCampaign(campaign.name);
+        const queue = queueNameForCampaign(campaign);
         return {
           id: record.id,
           agentName: record.agent || campaign.agent,
@@ -296,14 +350,15 @@ const CallCenter = () => {
           geoFlag: geoFlagForPhone(record.phone || ""),
           campaign: campaign.name,
           duration: record.duration || "0:00",
-          status: record.status === "in-progress" ? "active" : record.status === "callback" ? "hold" : "ringing",
+          status: record.status,
+          lastCalledAt: record.lastCalledAt ?? null,
           queue,
-          notes: record.notes || `${record.status} call in ${campaign.name}`,
+          notes: record.notes || `${DISPLAY_STATUS_LABEL[record.status]} in ${campaign.name}`,
         };
       });
 
-    const finishedCalls: CompletedCall[] = allRecords
-      .filter(({ record }) => ["completed", "callback", "no-answer", "failed", "voicemail"].includes(record.status))
+    const finishedCalls: StoredCall[] = allRecords
+      .filter(({ record }) => !PRE_ATTEMPT_STATUSES.includes(record.status))
       .map(({ campaign, record }) => ({
         id: record.id,
         agentName: record.agent || campaign.agent,
@@ -314,46 +369,87 @@ const CallCenter = () => {
         campaign: campaign.name,
         duration: record.duration || "0:00",
         date: record.callDate || "Not scheduled",
-        outcome: record.status === "completed" ? "converted" : record.status === "callback" ? "callback" : record.status === "no-answer" ? "no-answer" : "rejected",
-        queue: queueNameForCampaign(campaign.name),
-        notes: record.notes || `${record.status} call in ${campaign.name}`,
+        status: record.status,
+        queue: queueNameForCampaign(campaign),
+        notes: record.notes || `${DISPLAY_STATUS_LABEL[record.status]} call in ${campaign.name}`,
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
 
-    const queueMap = ["Sales", "Customer Service", "Support", "Billing"].map((name) => ({
+    // D.7 — the queue list itself is now real too: whichever industries actually appear on the
+    // pipeline, not a fixed four-item guess (Sales/Customer Service/Support/Billing) that had no
+    // relationship to any real campaign's industry.
+    const queueNames = [...new Set(currentCalls.map((call) => call.queue))].sort();
+    const queueMap = queueNames.map((name) => ({
       name,
-      activeCalls: currentCalls.filter((call) => call.queue === name && call.status === "active").length,
-      waiting: currentCalls.filter((call) => call.queue === name && call.status === "ringing").length,
-      hold: currentCalls.filter((call) => call.queue === name && call.status === "hold").length,
+      dialing: currentCalls.filter((call) => call.queue === name && call.status === "dialing").length,
+      queued: currentCalls.filter((call) => call.queue === name && call.status === "queued").length,
+      stalled: currentCalls.filter((call) => call.queue === name && call.status === "stalled").length,
       agents: new Set(currentCalls.filter((call) => call.queue === name).map((call) => call.agentName)).size,
     }));
 
-    return { liveCalls: currentCalls, completedCalls: finishedCalls, queues: queueMap };
+    return { pipelineCalls: currentCalls, storedCalls: finishedCalls, queues: queueMap };
   }, [campaigns]);
 
-  useMemo(() => {
+  // Purely derived from the calls above — no state. Writing this into a useState from inside a
+  // useMemo (what this used to do) is a render-phase update, and since every array here is a new
+  // reference it looped until React threw "Too many re-renders" and blanked the whole app.
+  const notifications = useMemo<Notification[]>(() => {
     const generated: Notification[] = [];
-    if (liveCalls[0]) {
-      generated.push({ id: `${liveCalls[0].id}-incoming`, type: "incoming_call", title: "Active lead in queue", message: `${liveCalls[0].leadName} is currently assigned to ${liveCalls[0].agentName}.`, read: false });
+    if (pipelineCalls[0]) {
+      const first = pipelineCalls[0];
+      generated.push({
+        id: `${first.id}-incoming`,
+        type: "incoming_call",
+        title: first.status === "dialing" ? "Active lead in queue" : "Lead waiting",
+        message: `${first.leadName} is ${DISPLAY_STATUS_LABEL[first.status].toLowerCase()}, assigned to ${first.agentName}.`,
+        read: false,
+      });
     }
-    if (liveCalls[1]) {
-      generated.push({ id: `${liveCalls[1].id}-assist`, type: "assistance", title: "Callback requires follow-up", message: `${liveCalls[1].leadName} is waiting in ${liveCalls[1].queue}.`, read: false });
+    if (pipelineCalls[1]) {
+      const second = pipelineCalls[1];
+      generated.push({
+        id: `${second.id}-assist`,
+        type: "assistance",
+        title: second.status === "stalled" ? "Lead needs attention" : "Lead waiting in queue",
+        message: `${second.leadName} is ${DISPLAY_STATUS_LABEL[second.status].toLowerCase()} in ${second.queue}.`,
+        read: false,
+      });
     }
-    if (completedCalls[0]) {
-      generated.push({ id: `${completedCalls[0].id}-done`, type: "call_ended", title: "Recent call stored", message: `${completedCalls[0].leadName} finished with outcome ${completedCalls[0].outcome}.`, read: true });
+    if (storedCalls[0]) {
+      generated.push({
+        id: `${storedCalls[0].id}-done`,
+        type: "call_ended",
+        title: "Recent call stored",
+        message: `${storedCalls[0].leadName} finished — ${DISPLAY_STATUS_LABEL[storedCalls[0].status]}.`,
+        read: true,
+      });
     }
-    setNotifications(generated);
-  }, [liveCalls, completedCalls]);
+    return generated;
+  }, [pipelineCalls, storedCalls]);
 
   const unreadCount = notifications.filter((notification) => !notification.read).length;
-  const filtered = filterQueue === "all" ? liveCalls : liveCalls.filter((call) => call.queue === filterQueue);
-  const selectedLiveCall = liveCalls.find((call) => call.id === selectedCall) || null;
-  const selectedRecording = completedCalls.find((call) => call.id === activeRecording) || null;
+  const filtered = filterQueue === "all" ? pipelineCalls : pipelineCalls.filter((call) => call.queue === filterQueue);
+  const selectedLiveCall = pipelineCalls.find((call) => call.id === selectedCall) || null;
+  const selectedRecording = storedCalls.find((call) => call.id === activeRecording) || null;
 
-  const totalActive = liveCalls.filter((call) => call.status === "active").length;
-  const totalWaiting = liveCalls.filter((call) => call.status === "ringing").length;
-  const totalHold = liveCalls.filter((call) => call.status === "hold").length;
-  const totalAgents = new Set(liveCalls.map((call) => call.agentName)).size;
+  // C.19 — the headline check: this must read the same as Campaigns' leadCounts.dialing/stalled
+  // and Dashboard's leadsDialingNow, not the old fake "1 Active / 5 Ringing".
+  const totalDialing = pipelineCalls.filter((call) => call.status === "dialing").length;
+  const totalQueued = pipelineCalls.filter((call) => call.status === "queued").length;
+  const totalStalled = pipelineCalls.filter((call) => call.status === "stalled").length;
+  const totalAgents = new Set(pipelineCalls.map((call) => call.agentName)).size;
+
+  // D.4 — real signal instead of a hardcoded green dot: isFetching/dataUpdatedAt come straight
+  // from the underlying useAccountData() query (React Query's own fields, already true — nothing
+  // to compute, just to actually read).
+  const minutesSinceSync = dataUpdatedAt ? Math.max(0, Math.floor((now - dataUpdatedAt) / 60_000)) : null;
+  const syncLabel = isFetching
+    ? "Syncing…"
+    : minutesSinceSync === null
+      ? "Not synced yet"
+      : minutesSinceSync < 1
+        ? "Synced just now"
+        : `Synced ${minutesSinceSync}m ago`;
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading call center...</div>;
@@ -371,9 +467,9 @@ const CallCenter = () => {
             <Bell className={`h-4 w-4 ${unreadCount > 0 ? "text-primary" : "text-muted-foreground"}`} />
             {unreadCount > 0 && <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-destructive text-destructive-foreground text-[9px] font-bold flex items-center justify-center">{unreadCount}</span>}
           </Button>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20">
-            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-medium text-green-500">Data Synced</span>
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border ${isFetching ? "bg-primary/10 border-primary/20" : "bg-green-500/10 border-green-500/20"}`}>
+            <div className={`h-2 w-2 rounded-full ${isFetching ? "bg-primary animate-pulse" : "bg-green-500"}`} />
+            <span className={`text-xs font-medium ${isFetching ? "text-primary" : "text-green-500"}`}>{syncLabel}</span>
           </div>
         </div>
       </div>
@@ -413,9 +509,9 @@ const CallCenter = () => {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatPill icon={PhoneCall} value={totalActive} label="Active Calls" accent />
-        <StatPill icon={Clock} value={totalWaiting} label="Ringing" />
-        <StatPill icon={Pause} value={totalHold} label="On Hold" />
+        <StatPill icon={PhoneCall} value={totalDialing} label="Dialing" accent />
+        <StatPill icon={Clock} value={totalQueued} label="Queued" />
+        <StatPill icon={AlertTriangle} value={totalStalled} label="Stalled" />
         <StatPill icon={Headphones} value={totalAgents} label="Agents Online" accent />
       </div>
 
@@ -429,52 +525,64 @@ const CallCenter = () => {
           <TabsTrigger value="recordings" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
             <History className="h-3.5 w-3.5" />
             Stored Calls
-            <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1">{completedCalls.length}</Badge>
+            <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1">{storedCalls.length}</Badge>
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="live" className="space-y-4 mt-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-muted-foreground mr-1">Queue:</span>
-            {["all", ...queues.map((queue) => queue.name)].map((queue) => (
-              <Button key={queue} size="sm" variant={filterQueue === queue ? "default" : "ghost"} className={`h-7 text-xs capitalize ${filterQueue === queue ? "" : "text-muted-foreground"}`} onClick={() => setFilterQueue(queue)}>
-                {queue}
-                {queue !== "all" && <span className="ml-1 text-[10px] opacity-60">({liveCalls.filter((call) => call.queue === queue).length})</span>}
-              </Button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            {queues.map((queue) => (
-              <div key={queue.name} className="rounded-xl border border-border bg-card p-4">
-                <p className="text-sm font-medium text-foreground">{queue.name}</p>
-                <div className="mt-3 space-y-2 text-xs text-muted-foreground">
-                  <div className="flex items-center justify-between"><span>Active</span><span className="text-foreground">{queue.activeCalls}</span></div>
-                  <div className="flex items-center justify-between"><span>Waiting</span><span className="text-foreground">{queue.waiting}</span></div>
-                  <div className="flex items-center justify-between"><span>On Hold</span><span className="text-foreground">{queue.hold}</span></div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
-            <div className="divide-y divide-border/50">
-              {filtered.map((call) => (
-                <LiveCallRow key={call.id} call={call} onSelect={(id) => setSelectedCall(selectedCall === id ? null : id)} isSelected={selectedCall === call.id} />
-              ))}
+          {!canViewLiveDashboard ? (
+            <div className="rounded-xl border border-border bg-card/50 p-8 text-center text-sm text-muted-foreground">
+              Watching the live pipeline needs the Call Center — Live Call Dashboard permission.
             </div>
-            {filtered.length === 0 && <div className="text-center py-12 text-muted-foreground text-sm">No active calls in this queue</div>}
-          </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-muted-foreground mr-1">Queue:</span>
+                {["all", ...queues.map((queue) => queue.name)].map((queue) => (
+                  <Button key={queue} size="sm" variant={filterQueue === queue ? "default" : "ghost"} className={`h-7 text-xs capitalize ${filterQueue === queue ? "" : "text-muted-foreground"}`} onClick={() => setFilterQueue(queue)}>
+                    {queue}
+                    {queue !== "all" && <span className="ml-1 text-[10px] opacity-60">({pipelineCalls.filter((call) => call.queue === queue).length})</span>}
+                  </Button>
+                ))}
+              </div>
 
-          {selectedLiveCall && <ExpandedCallPanel call={selectedLiveCall} />}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                {queues.map((queue) => (
+                  <div key={queue.name} className="rounded-xl border border-border bg-card p-4">
+                    <p className="text-sm font-medium text-foreground">{queue.name}</p>
+                    <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-between"><span>Dialing</span><span className="text-foreground">{queue.dialing}</span></div>
+                      <div className="flex items-center justify-between"><span>Queued</span><span className="text-foreground">{queue.queued}</span></div>
+                      <div className="flex items-center justify-between"><span>Stalled</span><span className="text-foreground">{queue.stalled}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
+                {/* D.8 — the cap is gone (was a bare .slice(0, 8)); this ScrollArea carries whatever
+                    real count is on the pipeline instead of silently hiding everything past 8. */}
+                <ScrollArea className="h-[420px]">
+                  <div className="divide-y divide-border/50">
+                    {filtered.map((call) => (
+                      <PipelineCallRow key={call.id} call={call} onSelect={(id) => setSelectedCall(selectedCall === id ? null : id)} isSelected={selectedCall === call.id} />
+                    ))}
+                  </div>
+                </ScrollArea>
+                {filtered.length === 0 && <div className="text-center py-12 text-muted-foreground text-sm">No active calls in this queue</div>}
+              </div>
+
+              {selectedLiveCall && <ExpandedCallPanel call={selectedLiveCall} now={now} />}
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="recordings" className="space-y-4 mt-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Outcome:</span>
-            {["all", "converted", "callback", "no-answer", "rejected"].map((outcome) => (
-              <Button key={outcome} size="sm" variant={recordingFilter === outcome ? "default" : "ghost"} className={`h-7 text-xs capitalize ${recordingFilter === outcome ? "" : "text-muted-foreground"}`} onClick={() => setRecordingFilter(outcome)}>
-                {outcome === "no-answer" ? "No Answer" : outcome}
+            {(["all", ...STORED_CALL_FILTERS] as const).map((status) => (
+              <Button key={status} size="sm" variant={recordingFilter === status ? "default" : "ghost"} className={`h-7 text-xs ${recordingFilter === status ? "" : "text-muted-foreground"}`} onClick={() => setRecordingFilter(status)}>
+                {status === "all" ? "All" : DISPLAY_STATUS_LABEL[status]}
               </Button>
             ))}
           </div>
@@ -494,10 +602,10 @@ const CallCenter = () => {
                 </tr>
               </thead>
               <tbody>
-                {completedCalls
-                  .filter((call) => recordingFilter === "all" || call.outcome === recordingFilter)
+                {storedCalls
+                  .filter((call) => recordingFilter === "all" || call.status === recordingFilter)
                   .map((call) => {
-                    const outcomeStyle = call.outcome === "converted" ? "bg-green-500/10 text-green-500 border-green-500/20" : call.outcome === "callback" ? "bg-primary/10 text-primary border-primary/20" : call.outcome === "rejected" ? "bg-destructive/10 text-destructive border-destructive/20" : "bg-muted text-muted-foreground border-border";
+                    const outcomeStyle = STORED_CALL_BADGE_CLASS[call.status];
                     return (
                       <tr key={call.id} className={`border-b border-border/50 last:border-0 cursor-pointer transition-colors hover:bg-muted/30 ${activeRecording === call.id ? "bg-primary/5" : ""}`} onClick={() => setActiveRecording(activeRecording === call.id ? null : call.id)}>
                         <td className="p-3 text-sm text-foreground font-medium">
@@ -510,7 +618,7 @@ const CallCenter = () => {
                         <td className="p-3 text-sm text-muted-foreground hidden md:table-cell">{call.geoFlag} {call.geo}</td>
                         <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell truncate">{call.campaign}</td>
                         <td className="p-3 text-sm text-muted-foreground font-mono">{call.duration}</td>
-                        <td className="p-3"><Badge variant="outline" className={`text-[10px] capitalize ${outcomeStyle}`}>{call.outcome}</Badge></td>
+                        <td className="p-3"><Badge variant="outline" className={`text-[10px] ${outcomeStyle}`}>{DISPLAY_STATUS_LABEL[call.status]}</Badge></td>
                         <td className="p-3 text-xs text-muted-foreground hidden lg:table-cell">{call.date}</td>
                         <td className="p-3">
                           <Button size="icon" variant={activeRecording === call.id ? "default" : "ghost"} className="h-7 w-7" onClick={(event) => { event.stopPropagation(); setActiveRecording(activeRecording === call.id ? null : call.id); }}>
@@ -522,7 +630,7 @@ const CallCenter = () => {
                   })}
               </tbody>
             </table>
-            {completedCalls.length === 0 && <div className="text-center py-12 text-muted-foreground text-sm">No completed calls stored yet</div>}
+            {storedCalls.length === 0 && <div className="text-center py-12 text-muted-foreground text-sm">No completed calls stored yet</div>}
           </div>
         </TabsContent>
       </Tabs>
