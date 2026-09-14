@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { User, Bell, Key, Building2, Save, Eye, EyeOff, Copy, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +20,18 @@ import { MyNetworksCard } from "@/components/settings/MyNetworksCard";
 // ordinary self-service every signed-in user gets, not a privileged system-config action.
 // Recorded here rather than forcing a fake gate onto placeholder UI — wire these two the day a
 // real system-configuration or API-integration screen is built, not before.
+const SETTINGS_TABS = ["profile", "company", "notifications", "api", "security"];
+
 const SettingsPage = () => {
   const { user, profile, role } = useAuth();
+  // Client-feedback follow-up (2026-09-11) — `/settings?tab=company` deep link, so the
+  // "Set company name" buttons on Campaigns can land the user directly on the field they
+  // need instead of on the Profile tab with no hint where to go. Validated against the real
+  // tab list: an unknown ?tab= value falls back to "profile" rather than rendering an empty
+  // Tabs body. Uncontrolled after mount on purpose — clicking the other tabs still just works.
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const initialTab = SETTINGS_TABS.includes(requestedTab ?? "") ? (requestedTab as string) : "profile";
   const [fullName, setFullName] = useState(profile?.full_name || "");
   const [companyName, setCompanyName] = useState(profile?.company_name || "");
   const [saving, setSaving] = useState(false);
@@ -61,7 +72,7 @@ const SettingsPage = () => {
         This page currently has one real persistence target: your `profiles` row. Notification preferences and API key management are not backed by database tables yet, so they are presented as informational status only instead of fake toggles.
       </Card>
 
-      <Tabs defaultValue="profile" className="space-y-6">
+      <Tabs defaultValue={initialTab} className="space-y-6">
         <TabsList className="bg-secondary border border-border">
           <TabsTrigger value="profile" className="gap-2"><User className="h-3.5 w-3.5" />Profile</TabsTrigger>
           <TabsTrigger value="company" className="gap-2"><Building2 className="h-3.5 w-3.5" />Company</TabsTrigger>

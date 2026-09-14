@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Upload, ChevronDown, ChevronRight, Play, Pause, CheckCircle, XCircle, Clock, AlertTriangle, Ban, HelpCircle, Trash2, Search, ArrowUpDown, ArrowUp, ArrowDown, ShieldAlert } from "lucide-react";
+import { Upload, ChevronDown, ChevronRight, Play, Pause, RotateCcw, CheckCircle, XCircle, Clock, AlertTriangle, Ban, HelpCircle, Trash2, Search, ArrowUpDown, ArrowUp, ArrowDown, ShieldAlert } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,8 +16,11 @@ import CallDetailSheet from "@/components/campaigns/CallDetailSheet";
 import { useCampaigns, UNASSIGNED_CAMPAIGN_ID } from "@/hooks/useCampaigns";
 import { useAgents } from "@/hooks/useAgents";
 import { fireDispatchTrigger } from "@/lib/dispatchTrigger";
-import { DISPLAY_STATUS_LABEL, formatPercent, type DisplayStatus } from "@/lib/callPipeline";
+import { COMPLETION_REASON_LABEL, DISPLAY_STATUS_LABEL, attemptSummaryLine, campaignCompletionReason, describeAttempts, formatPercent, type DisplayStatus } from "@/lib/callPipeline";
+import { detectBrowserTimezone, needsTimezoneAttention } from "@/lib/timezones";
+import { needsCompanyName } from "@/lib/companyIdentity";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 
 // C.13 — Record<DisplayStatus, …>, not Record<string, …>: a new state added to the union breaks
 // the build here instead of silently falling back to "pending" the way the old open-ended Record
@@ -57,7 +60,17 @@ const Campaigns = () => {
   // the whole gate), while lead_management has a real full-vs-view split (support_manager holds
   // it at `view` only — E21) so viewing the leads table needs presence, editing/deleting a lead
   // needs `full`.
-  const { hasPermission, hasPermissionAtLeast } = useAuth();
+  const { hasPermission, hasPermissionAtLeast, profile, profileLoaded } = useAuth();
+  const navigate = useNavigate();
+  // 2026-09-11 — account-level, NOT per-campaign, so this is checked once here and
+  // rendered once below. `profiles.company_name` is what the assistant speaks as
+  // {{company_name}}; blank resolves to "" and silently mangles every greeting.
+  //
+  // Gated on `profileLoaded` on purpose: `profile` is null until the fetch resolves, so
+  // without it this reads "missing" on every first render — the banner would flash yellow
+  // on each page load and the Start button would sit disabled for a beat on a perfectly
+  // well-configured account. Absence of data is not the same claim as an empty field.
+  const companyNameMissing = profileLoaded && needsCompanyName(profile?.company_name);
   const canManageCampaigns = hasPermission("campaigns.create_delete");
   const canStartPause = hasPermission("campaigns.start_pause_stop");
   const canUploadLeads = hasPermission("campaigns.bulk_lead_upload");
@@ -70,9 +83,15 @@ const Campaigns = () => {
   // 2026-08-31 "/call-center" lesson.
   const { agents } = useAgents();
   const agentsList = useMemo(() => agents ?? [], [agents]);
+  // Call-quality plan §C.5/§C.6 — computed once per page load (a browser's own zone doesn't
+  // change mid-session), used only to decide whether the narrow "still on the UTC default"
+  // banner below should show, never written anywhere by itself.
+  const browserTimezone = useMemo(() => detectBrowserTimezone(), []);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [uploadDefaultCampaignId, setUploadDefaultCampaignId] = useState<string | undefined>(undefined);
+  // §H — undefined from the header "Upload Data" button (full picker), a campaign id from a
+  // per-campaign "Add Data" button (picker replaced by a fixed read-only target).
+  const [uploadLockedCampaignId, setUploadLockedCampaignId] = useState<string | undefined>(undefined);
   const [startTarget, setStartTarget] = useState<Campaign | null>(null);
   const [detailRecord, setDetailRecord] = useState<CallRecord | null>(null);
   // D.9 — deliberately left decorative here, unlike Dashboard.tsx/Reports.tsx (both wired to
@@ -184,6 +203,14 @@ const Campaigns = () => {
   };
 
   const handleConfirmStart = async (campaign: Campaign) => {
+    // 2026-09-11 — StartCampaignDialog already disables its own button for this, and
+    // toggleCampaignStatus routes every start through that dialog (there is no bypass today).
+    // Re-checked here anyway so a future call site that skips the dialog fails loudly instead
+    // of quietly dialing leads with a broken greeting. Throws so the dialog stays open.
+    if (companyNameMissing) {
+      toast.error("Set your company name in Settings → Company first — the AI says it out loud on every call.");
+      throw new Error("Company name is not set");
+    }
     try {
       await updateDBCampaign({ id: campaign.id, updates: { status: "Active" } });
       // Event-driven Phase 4 §B.1 — after the DB write, never before (a trigger fired earlier
@@ -203,6 +230,9 @@ const Campaigns = () => {
       toast.success(`Settings updated`);
     } catch (err) {
       toast.error(`Failed to update settings: ${errorMessage(err)}`);
+      // §X.2 — re-throw so CampaignSettingsDialog keeps itself open on failure instead of
+      // closing and (previously) also claiming success.
+      throw err;
     }
   };
 
@@ -261,13 +291,41 @@ const Campaigns = () => {
             className="border-border"
             disabled={!canUploadLeads}
             title={canUploadLeads ? undefined : "Needs the Campaigns — Bulk Lead Upload permission"}
-            onClick={() => { setUploadDefaultCampaignId(undefined); setUploadDialogOpen(true); }}
+            onClick={() => { setUploadLockedCampaignId(undefined); setUploadDialogOpen(true); }}
           >
             <Upload className="h-4 w-4 mr-2" />Upload Data
           </Button>
           <CreateCampaignDialog onCreated={handleCreate} agents={agentsList} />
         </div>
       </div>
+
+      {/* 2026-09-11 — the company-name gap, found on a real test call (`call_records`
+          2026-09-11 08:30:56 UTC): every one of the 10 live `profiles` rows had
+          `company_name` NULL, so dispatch-batch sent `company_name: ''` and the assistant
+          read "...calling on behalf of [nothing] We help Los Angeles homeowners...".
+          Deliberately page-level, not per-campaign-card like the timezone banner below:
+          this is one account-wide setting, so a per-card copy would repeat identically on
+          every row. Mirrors that banner's shape otherwise. */}
+      {companyNameMissing && (
+        <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-foreground">
+          <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0 mt-0.5" />
+          <div className="flex-1 leading-relaxed">
+            <p className="font-medium">Your company name is blank — and the AI says it out loud on every call.</p>
+            <p className="text-muted-foreground text-xs mt-1">
+              The agent introduces itself as "…calling on behalf of <span className="italic">your company</span>". While this
+              is empty, every caller hears that sentence with a hole in it. Campaigns can't be started until it's set.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-yellow-500/40"
+            onClick={() => navigate("/settings?tab=company")}
+          >
+            Set company name
+          </Button>
+        </div>
+      )}
 
       {/* Campaign List */}
       <div className="space-y-3">
@@ -278,6 +336,13 @@ const Campaigns = () => {
         )}
         {campaigns.map((campaign: Campaign) => {
           const isUnassigned = campaign.id === UNASSIGNED_CAMPAIGN_ID;
+          // Only meaningful for a Completed campaign; null when neither ending explains it
+          // (e.g. more leads were uploaded after it finished).
+          const completionReason = campaignCompletionReason(
+            campaign.qualifiedLeadsSent,
+            campaign.maxQualifiedLeads,
+            campaign.leadCounts,
+          );
           return (
           <div key={campaign.id} className="bg-card rounded-lg border border-border overflow-hidden">
             {/* Campaign Row */}
@@ -308,14 +373,51 @@ const Campaigns = () => {
                     </span>
                   </div>
                 )}
+                {/* Call-quality plan §C.5/§C.6 — narrowly scoped: fires ONLY when this campaign is
+                    still on the literal database default ('UTC', E8's own bug) and this browser
+                    isn't itself in UTC. Never fires for a campaign someone deliberately set to
+                    UTC, or one already fixed. */}
+                {!isUnassigned && needsTimezoneAttention(campaign.timezone, browserTimezone) && (
+                  <div
+                    className="mt-2 flex items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs text-foreground"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
+                    <span className="flex-1 leading-relaxed">
+                      Work hours ({campaign.workHours.startTime}–{campaign.workHours.endTime}) are still on the UTC
+                      default — that may not be when you think calls go out. If it looks like nothing is happening,
+                      this is usually why.
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] shrink-0 border-yellow-500/40"
+                      disabled={!(canManageCampaigns || canStartPause)}
+                      title={canManageCampaigns || canStartPause ? undefined : "Needs the Campaigns — Create/Delete or Start/Pause/Stop permission"}
+                      onClick={async () => {
+                        try {
+                          await updateDBCampaign({ id: campaign.id, updates: { timezone: browserTimezone } });
+                          toast.success(`Timezone set to ${browserTimezone}. Reversible any time in Settings.`);
+                        } catch (err) {
+                          toast.error(`Failed to update timezone: ${errorMessage(err)}`);
+                        }
+                      }}
+                    >
+                      Set to {browserTimezone}
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {/* E7/C.11 — the synthetic "Unassigned Leads" grouping isn't a real campaigns row:
                   no start/pause, settings, or delete action has anything to act on. */}
               {!isUnassigned && (
                 <>
-                  {/* Start / Pause button — C.9: "Completed" is no longer a member of Campaign["status"] */}
-                  {campaign.status !== "Scheduled" && (
+                  {/* §E.13 — Active/Paused get the toggle. Scheduled and Completed each get a
+                      dedicated button that opens the Start confirmation dialog; a Completed
+                      campaign must NOT offer "Pause" (it isn't running) and its button reads
+                      "Restart" with a cap warning in the dialog. */}
+                  {(campaign.status === "Active" || campaign.status === "Paused") && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -342,15 +444,39 @@ const Campaigns = () => {
                       <Play className="h-4 w-4 text-primary" />
                     </Button>
                   )}
+                  {campaign.status === "Completed" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0"
+                      disabled={!canStartPause}
+                      onClick={(e) => { e.stopPropagation(); setStartTarget(campaign); }}
+                      title={canStartPause ? "Restart campaign (raise the qualified-leads cap first)" : "Needs the Campaigns — Start/Pause/Stop permission"}
+                    >
+                      <RotateCcw className="h-4 w-4 text-primary" />
+                    </Button>
+                  )}
 
                   {/* Settings */}
                   <CampaignSettingsDialog campaign={campaign} onSave={updateCampaignSettings} agents={agentsList} />
                 </>
               )}
 
-              <Badge variant="outline" className={`text-xs ${isUnassigned ? "bg-muted text-muted-foreground border-border" : statusColor[campaign.status]}`}>
-                {isUnassigned ? "No campaign" : campaign.status}
-              </Badge>
+              {/* 2026-09-11 — a Completed campaign says WHY it finished. The reason is derived
+                  (callPipeline.campaignCompletionReason), not stored: "Qualified-leads target
+                  reached" means it stopped early and raising the cap may be worth it, whereas
+                  "All leads called" means only new leads will restart it. Without this, both
+                  endings look identical and a user can't tell which action to take. */}
+              <div className="flex flex-col items-end gap-0.5">
+                <Badge variant="outline" className={`text-xs ${isUnassigned ? "bg-muted text-muted-foreground border-border" : statusColor[campaign.status]}`}>
+                  {isUnassigned ? "No campaign" : campaign.status}
+                </Badge>
+                {campaign.status === "Completed" && completionReason && (
+                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                    {COMPLETION_REASON_LABEL[completionReason]}
+                  </span>
+                )}
+              </div>
               <div className="text-right hidden sm:block">
                 <p className="text-sm text-foreground">{campaign.callsAttempted.toLocaleString()}</p>
                 <p className="text-xs text-muted-foreground">attempted</p>
@@ -421,7 +547,7 @@ const Campaigns = () => {
                         className="border-border text-xs"
                         disabled={!canUploadLeads}
                         title={canUploadLeads ? undefined : "Needs the Campaigns — Bulk Lead Upload permission"}
-                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setUploadDefaultCampaignId(campaign.id); setUploadDialogOpen(true); }}
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); setUploadLockedCampaignId(campaign.id); setUploadDialogOpen(true); }}
                       >
                         <Upload className="h-3 w-3 mr-1" />Add Data
                       </Button>
@@ -531,6 +657,12 @@ const Campaigns = () => {
                               {filteredRecords.map((record) => {
                                   const statusConf = callStatusIcons[record.status];
                                   const StatusIcon = statusConf.icon;
+                                  // Only for the buckets whose badge doesn't already say what
+                                  // happened — a "called" row shows its real outcome instead.
+                                  const attemptLine =
+                                    record.status === "queued" || record.status === "stalled" || record.status === "excluded"
+                                      ? attemptSummaryLine(describeAttempts(record))
+                                      : null;
                                   return (
                                     <tr
                                       key={record.id}
@@ -552,6 +684,14 @@ const Campaigns = () => {
                                           <span className={`text-xs ${statusConf.color}`}>{DISPLAY_STATUS_LABEL[record.status]}</span>
                                           {record.needsReview && <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />}
                                         </div>
+                                        {/* 2026-09-11 — "Queued" alone is a lie for a lead that
+                                            HAS been dialled and came back busy. Shown only for
+                                            the buckets where the badge doesn't already carry the
+                                            outcome: a completed/no-answer/failed row says what
+                                            happened in the badge, duration and date columns. */}
+                                        {attemptLine && (
+                                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{attemptLine}</p>
+                                        )}
                                       </td>
                                       <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell">{record.duration}</td>
                                       <td className="p-3 text-sm text-muted-foreground hidden lg:table-cell whitespace-nowrap">{record.callDate}</td>
@@ -603,10 +743,10 @@ const Campaigns = () => {
         open={uploadDialogOpen}
         onOpenChange={setUploadDialogOpen}
         campaigns={campaigns}
-        defaultCampaignId={uploadDefaultCampaignId}
+        lockedCampaignId={uploadLockedCampaignId}
         addLeads={addLeads}
       />
-      <StartCampaignDialog campaign={startTarget} onOpenChange={(open) => !open && setStartTarget(null)} onConfirm={handleConfirmStart} />
+      <StartCampaignDialog campaign={startTarget} onOpenChange={(open) => !open && setStartTarget(null)} onConfirm={handleConfirmStart} companyNameMissing={companyNameMissing} />
       {/* D.12 — offers the same delete action the table row already has, for "Not a call
           attempt" (unattributed/debris) rows specifically — see CallDetailSheet.tsx's own gate. */}
       <CallDetailSheet record={detailRecord} onOpenChange={(open) => !open && setDetailRecord(null)} onOverride={handleOverride} onDelete={deleteRecordByKind} canDelete={canManageLeads} />

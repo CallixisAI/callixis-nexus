@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { describeFunctionError } from "@/lib/functionError";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password";
 import callixisLogo from "@/assets/callixis-logo.png";
 
 // Phase 4 (docs/admin-module-plan/PHASE-4-invite-and-activation.md §F) — the unauthenticated
@@ -15,7 +16,9 @@ import callixisLogo from "@/assets/callixis-logo.png";
 // email/role is being activated before asking for anything), then an 'activate' submit
 // carrying token + code + password together. See that function's own header for why the auth
 // user doesn't exist until this succeeds, and for the generic-error reasoning behind §D.4.
-const MIN_PASSWORD_LENGTH = 8;
+//
+// Client-feedback plan §A / A.2 — MIN_PASSWORD_LENGTH moved to src/lib/password.ts so
+// ResetPassword.tsx shares the exact same rule instead of hardcoding its own.
 
 type LookupState =
   | { status: "loading" }

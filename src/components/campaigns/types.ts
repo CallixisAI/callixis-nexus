@@ -11,10 +11,14 @@ export interface WorkHours {
 export interface Campaign {
   id: string;
   name: string;
-  // C.9 — "Completed" removed: campaigns.status is never written as anything but
-  // active/paused/scheduled (src/lib/callPipeline.ts's normalizeCampaignStatus), so the old
-  // fourth member was unreachable dead vocabulary, not a real state.
-  status: "Active" | "Paused" | "Scheduled";
+  // 🔴 Client-feedback plan §E.4 — "Completed" is BACK. counting-model Phase 3's C.9 removed it
+  // because nothing wrote campaigns.status as anything but active/paused/scheduled — a correct
+  // read of the code *at that time*. §E.6 changed that: call-ingest now sets a campaign to
+  // 'completed' the moment its qualified count reaches max_qualified_leads. So this widening is a
+  // downstream consequence of §E.6 making the value reachable, NOT someone reverting C.9 by
+  // accident. (mapCampaignWithStats maps the raw 'completed' → this "Completed" via
+  // CAMPAIGN_STATUS_LABEL.)
+  status: "Active" | "Paused" | "Scheduled" | "Completed";
   // C.1 — renamed from `calls`: this is real call ATTEMPTS (call_records rows classified by
   // src/lib/callPipeline.ts's countCalls as completed/no-answer/failed), never debris rows.
   callsAttempted: number;
@@ -75,6 +79,12 @@ export interface CallRecord {
   leadScore?: number | null;
   recordingUrl?: string | null;
   transcript?: string | null;
+  // Call-quality plan §E.4f — the raw call_records.transcript_messages column (untyped JSONB,
+  // shape asserted only by src/lib/transcript.ts's own runtime checks), not yet resolved into
+  // turns. E.5 renders with resolveTranscriptTurns(transcriptMessages, transcript), so a NULL
+  // here — every call recorded before this column existed — correctly falls back to parsing
+  // `transcript` above instead.
+  transcriptMessages?: unknown;
   disqualReason?: string | null;
   needsReview?: boolean;
   doNotCall?: boolean;
@@ -87,10 +97,24 @@ export interface CallRecord {
   // alongside the display string so consumers can sort/compute elapsed time without re-parsing
   // a human-formatted date.
   lastCalledAt?: string | null;
+  // 2026-09-11 — the two facts that make an already-attempted lead distinguishable from an
+  // untouched one. Both were already being fetched (useAccountData selects * from leads and
+  // call_records); neither had ever been carried this far, so a lead that came back
+  // `customer-busy` rendered as a bare "Queued". Read via callPipeline.describeAttempts().
+  //
+  // endedReason is Vapi's RAW value (e.g. "customer-busy"), never a pre-formatted label — the
+  // phrasing decision belongs to ENDED_REASON_LABEL, in one place.
+  endedReason?: string | null;
+  // leads.next_call_at — when the scheduled retry is due. May be in the past (due now).
+  nextCallAt?: string | null;
 }
 
 export const statusColor: Record<string, string> = {
   "Active": "bg-primary/20 text-primary border-primary/30",
   "Paused": "bg-yellow-500/20 text-yellow-500 border-yellow-500/30",
   "Scheduled": "bg-blue-500/20 text-blue-500 border-blue-500/30",
+  // §E.4 — a finished-at-the-cap campaign. Muted/neutral, distinct from Paused (which reads as
+  // "someone stopped this on purpose, it can resume as-is") — a completed campaign needs its cap
+  // raised before Restart does anything.
+  "Completed": "bg-muted text-muted-foreground border-border",
 };

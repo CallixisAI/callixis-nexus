@@ -58,6 +58,114 @@ function looksLikeRefusal(summary: string | null | undefined, disqualReason: str
   return REFUSAL_PATTERN.test(text)
 }
 
+// Client-feedback plan §E.6/E.7/E.8 — enforce campaigns.max_qualified_leads, PLUS (2026-09-11,
+// James) the other way a campaign finishes: every lead has been called and nothing dialable is
+// left. Both end the same way — status 'completed' — so they live in one function with one
+// campaign fetch and one decision.
+//
+// This is the ONLY point that can catch either ending: if the call that just finished was the
+// campaign's last dialable lead (whether or not it qualified), there are no due leads left, so
+// the dispatcher (dispatch-batch ?action=due, and has_due_leads()'s pg_cron tick) never revisits
+// this campaign — it would sit on "Active" forever, quietly finished. §E.10 in dispatch-batch is
+// defence-in-depth for a *different* case (a cap lowered below an already-reached count); it
+// structurally cannot cover either of these.
+//
+// §E.8 🔒 — like fireDispatchTrigger below, a failure here must NEVER fail the ingest. The call
+// record is already written by this point; the worst case of this throwing is a campaign that
+// stays "Active" one call too long, self-corrected on the next call to finish.
+//
+// Predicates mirror src/lib/callPipeline.ts's isQualifiedCapReached and isLeadPoolExhausted
+// (grep them — that's the source of truth; this is a Deno function and can't import from src/).
+// max_qualified_leads = 0 means unlimited.
+async function enforceCampaignCompletion(
+  supabase: ReturnType<typeof createClient>,
+  campaignId: string,
+  wasQualified: boolean,
+): Promise<void> {
+  try {
+    const { data: campaign, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('max_qualified_leads, status')
+      .eq('id', campaignId)
+      .single()
+    if (campaignError || !campaign) return
+
+    // Only an ACTIVE campaign auto-completes. A paused campaign is already not calling, and
+    // flipping it would silently discard the fact that a human paused it on purpose. (This is
+    // narrower than §E.6's original `status === 'completed'` bail — deliberate, 2026-09-11.)
+    if (campaign.status !== 'active') return
+
+    // ── 1. The qualified-leads cap. Only reachable on a qualifying call, so skip the COUNT
+    //       entirely otherwise. Checked FIRST: it's the more informative ending, because it
+    //       means the campaign stopped early and leads may remain worth calling.
+    const cap = typeof campaign.max_qualified_leads === 'number' ? campaign.max_qualified_leads : 0
+    if (wasQualified && cap > 0) {
+      const { count, error: countError } = await supabase
+        .from('call_records')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('is_qualified', true)
+      if (countError) return
+
+      if ((count ?? 0) >= cap) {
+        // D-5 — stop calling AND flip the status so the UI stops showing "Active" for a campaign
+        // that isn't running. has_due_leads() filters status='active', so this alone also stops
+        // the pg_cron tick — no migration needed (§E.15).
+        await supabase.from('campaigns').update({ status: 'completed' }).eq('id', campaignId)
+        console.log(`call-ingest: campaign ${campaignId} reached max_qualified_leads (${cap}) — set to completed`)
+        return
+      }
+    }
+
+    // ── 2. The lead pool is spent: nothing is left that could ever be dialed again.
+    //
+    // 🔑 Deliberately NOT filtered on next_call_at. A lead with a retry scheduled for tomorrow,
+    //    or one simply waiting for work hours, is still going to be called — it just isn't due
+    //    right now. Treating "nothing due this minute" as "finished" would auto-complete every
+    //    campaign overnight. Mirrors bucketLead(), which never looks at next_call_at either.
+    //
+    // Two plain counts rather than one PostgREST .or(...) with a nested and(): the string form
+    // is easy to get subtly wrong and fails silently (a bad filter returns rows, not an error),
+    // and this path can't be exercised live from here.
+
+    // A call still in flight means the campaign isn't finished. Includes leads the sweeper
+    // (callixis-sweep-stuck-leads) is about to reset to 'pending' and dial again.
+    const { count: dialingCount, error: dialingError } = await supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+      .eq('call_status', 'dialing')
+    if (dialingError) return
+    if ((dialingCount ?? 0) > 0) return
+
+    // Still dialable: the exact predicate dispatch-batch ?action=due and has_due_leads() select
+    // on, minus their next_call_at / work-hours clauses (see the note above).
+    const { count: dialableCount, error: dialableError } = await supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+      .eq('call_status', 'pending')
+      .eq('do_not_call', false)
+      .lt('retry_count', MAX_RETRY_COUNT)
+    if (dialableError) return
+    if ((dialableCount ?? 0) > 0) return
+
+    // Guard the empty campaign: zero leads is "never started", not "finished". Reachable here
+    // because payloadCampaignId can be the legacy fallback id while the lead belongs elsewhere.
+    const { count: totalCount, error: totalError } = await supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+    if (totalError) return
+    if ((totalCount ?? 0) === 0) return
+
+    await supabase.from('campaigns').update({ status: 'completed' }).eq('id', campaignId)
+    console.log(`call-ingest: campaign ${campaignId} has no dialable leads left — set to completed`)
+  } catch (err) {
+    console.error('call-ingest: enforceCampaignCompletion failed (non-fatal)', err instanceof Error ? err.message : String(err))
+  }
+}
+
 // §B.3b 🔒 — a trigger failure must NEVER fail the ingest. Losing a call record is real data
 // loss; a missed trigger is a few minutes of latency (the pre-Phase-4 behaviour). Every path
 // here catches and logs rather than throwing, and the call site below never awaits this longer
@@ -182,6 +290,7 @@ serve(async (req) => {
       ended_reason,
       recording_url,
       transcript,
+      transcript_messages,
       cost,
       outcome,
       is_qualified,
@@ -350,6 +459,10 @@ serve(async (req) => {
           ended_reason: (ended_reason as string) || null,
           lead_score: typeof lead_score === 'number' ? lead_score : null,
           transcript: (transcript as string) || null,
+          // §E.4e — stored as-is (already trimmed/stripped upstream, §E.4a). `null` for any
+          // payload that doesn't carry it — every call recorded before this column existed, and
+          // any future call whose end-of-call report carried no artifact.messages.
+          transcript_messages: Array.isArray(transcript_messages) ? transcript_messages : null,
           cost: typeof cost === 'number' ? cost : null,
           disqual_reason: (disqual_reason as string) || null,
           // Phase 2 §C.5 forces an unrecognized verdict to needs_review in n8n; this is the first
@@ -363,6 +476,13 @@ serve(async (req) => {
     if (upsertError) {
       return jsonError(500, 'failed to write call_records', upsertError.message)
     }
+
+    // Client-feedback plan §E.6 (+ 2026-09-11's lead-exhaustion half) — the call_record is now
+    // written, so the qualified count below includes it, and this lead's own call_status update
+    // has already landed above, so the "anything left to dial?" counts see its final state.
+    // Runs on EVERY call, not just qualified ones: the campaign's last lead can just as easily
+    // end unqualified. Never throws (see enforceCampaignCompletion).
+    await enforceCampaignCompletion(supabase, payloadCampaignId, is_qualified === true)
 
     // §B.3a — after the write, not before. The freed concurrency slot only exists once this
     // lead's call_status is no longer 'dialing' (dispatch-batch:111-115 counts 'dialing' leads

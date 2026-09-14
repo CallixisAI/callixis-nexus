@@ -100,12 +100,16 @@ export function mergeLeadsWithCallRecords(leads: LeadRow[], callRecords: CallRec
         leadScore: cr.lead_score,
         recordingUrl: cr.recording_url,
         transcript: cr.transcript,
+        // Call-quality plan §E.4f.
+        transcriptMessages: cr.transcript_messages,
         disqualReason: cr.disqual_reason,
         needsReview: cr.needs_review,
         doNotCall: lead.do_not_call,
         retryCount: lead.retry_count,
         callRecordId: cr.id,
         lastCalledAt: lead.last_called_at,
+        endedReason: cr.ended_reason,
+        nextCallAt: lead.next_call_at,
       };
     }
 
@@ -125,10 +129,17 @@ export function mergeLeadsWithCallRecords(leads: LeadRow[], callRecords: CallRec
       leadScore: lead.lead_score,
       recordingUrl: null,
       transcript: null,
+      // Call-quality plan §E.4f — never called yet, so there's nothing to have captured.
+      transcriptMessages: null,
       disqualReason: null,
       needsReview: false,
       doNotCall: lead.do_not_call,
       retryCount: lead.retry_count,
+      // No call record to read a reason from. next_call_at is still carried: a lead can carry a
+      // scheduled retry from an attempt whose call_records row never landed (the exact failure
+      // the call-reliability plan exists for), and saying "retrying at 22:07" is still true.
+      endedReason: null,
+      nextCallAt: lead.next_call_at,
       callRecordId: null,
       lastCalledAt: lead.last_called_at,
     };
@@ -152,6 +163,8 @@ export function mergeLeadsWithCallRecords(leads: LeadRow[], callRecords: CallRec
       leadScore: cr.lead_score,
       recordingUrl: cr.recording_url,
       transcript: cr.transcript,
+      // Call-quality plan §E.4f.
+      transcriptMessages: cr.transcript_messages,
       disqualReason: cr.disqual_reason,
       needsReview: cr.needs_review,
       doNotCall: false,
@@ -270,6 +283,35 @@ export function buildCampaignsFromAccountData(campaignRows: CampaignRow[], leads
   return mapped;
 }
 
+// Call-quality plan §C.2/§C.2t — pulled out of createMutation's own mutationFn so the load-bearing
+// fix (E8: the insert used to omit `timezone` entirely) has a real unit test rather than only a
+// code read. This repo has no `vi.mock` convention for the Supabase client itself (see
+// dispatchTrigger.test.ts's own note on why `fireDispatchTrigger` isn't unit-tested) — extracting
+// the pure payload-building logic sidesteps that rather than fighting it.
+export function buildCampaignInsertPayload(userId: string | undefined, newCampaign: Partial<Campaign>) {
+  return {
+    user_id: userId,
+    name: newCampaign.name,
+    status: (newCampaign.status || 'Paused').toLowerCase(),
+    industry: newCampaign.industry,
+    // AI Agents plan Phase 3 §D.4/E5 — this insert used to omit agent_id entirely, so every
+    // campaign was created Unassigned regardless of what the (fictional, E6) agent dropdown
+    // showed. `|| null` rather than requiring it: an agent-less campaign is a real, supported
+    // state (D.3's "no agents in this industry yet" case), not an error.
+    agent_id: newCampaign.agentId || null,
+    budget: newCampaign.budget || 0,
+    max_qualified_leads: newCampaign.maxQualifiedLeads || 0,
+    crm_api_endpoint: newCampaign.crmApiEndpoint || "",
+    work_hours: newCampaign.workHours || { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" },
+    // Call-quality plan §C.2 — THE load-bearing fix (E8): this insert used to omit `timezone`
+    // entirely, so every campaign silently landed on the database default ('UTC') regardless of
+    // what CreateCampaignDialog's field appeared to set. Every other §C item is cosmetic without
+    // this line.
+    timezone: newCampaign.timezone || "UTC",
+    start_date: new Date().toISOString(),
+  };
+}
+
 // Phase 2 (counting-model plan) — campaigns/leads/call_records now come from the one shared
 // useAccountData() query instead of three independent selects on their own queryKey. Public
 // surface here is unchanged on purpose (checklist B.4): every consumer keeps working exactly as
@@ -297,22 +339,7 @@ export function useCampaigns() {
     mutationFn: async (newCampaign: Partial<Campaign>) => {
       const { data, error } = await supabase
         .from('campaigns')
-        .insert([{
-          user_id: userId,
-          name: newCampaign.name,
-          status: (newCampaign.status || 'Paused').toLowerCase(),
-          industry: newCampaign.industry,
-          // AI Agents plan Phase 3 §D.4/E5 — this insert used to omit agent_id entirely, so
-          // every campaign was created Unassigned regardless of what the (fictional, E6) agent
-          // dropdown showed. `|| null` rather than requiring it: an agent-less campaign is a
-          // real, supported state (D.3's "no agents in this industry yet" case), not an error.
-          agent_id: newCampaign.agentId || null,
-          budget: newCampaign.budget || 0,
-          max_qualified_leads: newCampaign.maxQualifiedLeads || 0,
-          crm_api_endpoint: newCampaign.crmApiEndpoint || "",
-          work_hours: newCampaign.workHours || { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" },
-          start_date: new Date().toISOString()
-        }])
+        .insert([buildCampaignInsertPayload(userId, newCampaign)])
         .select()
         .single();
 

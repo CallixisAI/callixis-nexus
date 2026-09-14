@@ -285,6 +285,10 @@ export type Database = {
           industry: string | null
           model: string
           voice: string
+          // Client-feedback plan §D / D-4 — the Logic Provider UI was removed (nothing read this
+          // column; it was a control with no downstream effect). The column is INTENTIONALLY
+          // retained: dropping it is a permanent change to live data for no gain, keeping it is
+          // free and reversible. Nothing writes or reads it as of that change — not drift.
           logic_provider: string | null
           script: string | null
           voice_settings: Json | null
@@ -333,21 +337,27 @@ export type Database = {
       industry_assistants: {
         Row: {
           industry: string
-          vapi_assistant_id: string
+          // Client-feedback plan §B.2 / B.6 — nullable now (was NOT NULL): a row can carry
+          // starter_instructions alone. The CHECK constraint industry_assistants_not_empty
+          // requires at least one of the two.
+          vapi_assistant_id: string | null
+          starter_instructions: string | null
           label: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           industry: string
-          vapi_assistant_id: string
+          vapi_assistant_id?: string | null
+          starter_instructions?: string | null
           label?: string | null
           created_at?: string
           updated_at?: string
         }
         Update: {
           industry?: string
-          vapi_assistant_id?: string
+          vapi_assistant_id?: string | null
+          starter_instructions?: string | null
           label?: string | null
           created_at?: string
           updated_at?: string
@@ -433,6 +443,10 @@ export type Database = {
           needs_review: boolean
           reviewed_by: string | null
           reviewed_at: string | null
+          // Call-quality plan §E.3 — Vapi's artifact.messages, trimmed to
+          // {role, message, secondsFromStart} with role='system' stripped before storage (E14).
+          // NULL for every call recorded before this column existed. See src/lib/transcript.ts.
+          transcript_messages: Json | null
           created_at: string
           updated_at: string
         }
@@ -460,6 +474,7 @@ export type Database = {
           needs_review?: boolean
           reviewed_by?: string | null
           reviewed_at?: string | null
+          transcript_messages?: Json | null
           created_at?: string
           updated_at?: string
         }
@@ -487,6 +502,7 @@ export type Database = {
           needs_review?: boolean
           reviewed_by?: string | null
           reviewed_at?: string | null
+          transcript_messages?: Json | null
           created_at?: string
           updated_at?: string
         }
@@ -911,6 +927,30 @@ export type Database = {
           success?: boolean
           ip?: string | null
           created_at?: string
+        }
+        Relationships: []
+      }
+      sweep_tick_log: {
+        // retire-n8n-timers Phase 2 (20260904010000_sweep_in_database.sql §C) — records real
+        // stuck-lead incidents (a row is written only when the sweep actually reset > 0 leads),
+        // not the 5-minute tick rate. Not queried from src/ — RLS is enabled with zero policies
+        // on purpose (same ops-table convention as dispatch_tick_log / dispatch_trigger_state);
+        // only the SECURITY DEFINER sweep_stuck_leads() function or a service-role connection
+        // touches it. Typed anyway per the schema-change skill's convention.
+        Row: {
+          id: number
+          swept_at: string
+          reset_count: number
+        }
+        Insert: {
+          id?: number
+          swept_at?: string
+          reset_count: number
+        }
+        Update: {
+          id?: number
+          swept_at?: string
+          reset_count?: number
         }
         Relationships: []
       }

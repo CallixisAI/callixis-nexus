@@ -144,7 +144,20 @@ serve(async (req) => {
       const candidatePoolSize = Math.min(Math.max(availableSlots * 5, 25), 200)
       const { data: candidates, error: candidatesError } = await supabase
         .from('leads')
-        .select('id, user_id, campaign_id, first_name, phone, external_ref, timezone, next_call_at, campaigns!inner(status, work_hours, timezone, daily_call_cap)')
+        // Client-feedback plan §E.9 — max_qualified_leads added to the embed; it was not fetched
+        // at all before. §E.10 reads it below.
+        // Call-quality plan §A.1a — `industry` and `agent_id` added, both plain columns on the
+        // SAME `campaigns!inner(...)` embed that's already running in production. §A.1b —
+        // deliberately NOT a nested `ai_agents(...)` embed: PostgREST can only join along a
+        // foreign key it can see, and a missing/misdescribed hosted relationship would return
+        // PGRST200 -> a 500 -> the dispatcher stops entirely. `types.ts` cannot confirm the FK is
+        // there (`Relationships: []` for every table), so agents are fetched with a separate
+        // plain SELECT below instead (§A.1f).
+        // Call-quality plan §A.6 (2026-09-11 addendum) — `email` added: James tested a real call
+        // and found the assistant never referenced the lead's email or phone number, on top of
+        // the agent-name gap §A already targets. Plumbed through the same three-layer '' defence
+        // as every other field here (see §A.5's comment on the response below).
+        .select('id, user_id, campaign_id, first_name, phone, email, external_ref, timezone, next_call_at, campaigns!inner(status, work_hours, timezone, daily_call_cap, max_qualified_leads, industry, agent_id)')
         .eq('call_status', 'pending')
         .eq('do_not_call', false)
         .lt('retry_count', MAX_RETRY_COUNT)
@@ -154,6 +167,26 @@ serve(async (req) => {
         .limit(candidatePoolSize)
       if (candidatesError) return jsonError(500, 'failed to fetch due leads', candidatesError.message)
 
+      // §A.1c/§A.1d/§A.1e — the industry -> Vapi assistant map, fetched once per request (at
+      // most 10 rows — src/lib/industries.ts has 10 values), NOT per candidate. The
+      // `.not('vapi_assistant_id', 'is', null)` filter is mandatory, not tidiness: a row can
+      // exist carrying only `starter_instructions` (client-feedback plan's own
+      // 20260909000000_industry_starter_instructions.sql made `vapi_assistant_id` nullable). A
+      // plain `map.has(industry)` would pass such a row, and the engine would then POST
+      // `assistantId: null` to Vapi and get a 400 for every lead in that industry — AFTER those
+      // leads had already been reserved. Skipping them as candidates costs nothing; a 400 after
+      // reservation costs a stranded concurrency slot and a burned retry attempt.
+      const normalizeIndustryKey = (s: string | null | undefined) => (s ?? '').trim().toLowerCase()
+      const { data: industryAssistantRows, error: industryAssistantsError } = await supabase
+        .from('industry_assistants')
+        .select('industry, vapi_assistant_id')
+        .not('vapi_assistant_id', 'is', null)
+      if (industryAssistantsError) return jsonError(500, 'failed to fetch industry assistants', industryAssistantsError.message)
+      const assistantIdByIndustry = new Map<string, string>()
+      for (const row of industryAssistantRows ?? []) {
+        if (row.vapi_assistant_id) assistantIdByIndustry.set(normalizeIndustryKey(row.industry), row.vapi_assistant_id)
+      }
+
       const now = new Date()
       // "Daily" is approximated as a UTC calendar day, not each campaign's local day - a
       // deliberate simplification. This cap only has to stop a misconfiguration from dialing an
@@ -162,19 +195,90 @@ serve(async (req) => {
       const startOfUtcDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
 
       const capRemaining = new Map<string, number>()
+      // Client-feedback plan §E.10 — one entry per campaign: "is this campaign already at or over
+      // its Max Qualified Leads cap". Lazily filled, mirroring capRemaining's own idiom — one
+      // COUNT per campaign per request, never one per lead.
+      const qualifiedCapReached = new Map<string, boolean>()
       const selected: typeof candidates = []
+
+      // §A.3c/§A.3e — NOT optional polish. Without these, "the assistant table is empty so
+      // nothing can dial" and "it's 3am so nothing is due" both produce an identical empty array
+      // + HTTP 200, and n8n shows an all-green run either way. These are what let a total,
+      // silent stoppage be told apart from a quiet night.
+      let skippedUnmappedIndustry = 0
+      let skippedOutsideHours = 0
+      let skippedBadPhone = 0
+      let skippedDailyCap = 0
+      let skippedQualifiedCap = 0
+      const unmappedIndustries = new Set<string>()
 
       for (const lead of candidates ?? []) {
         if (selected.length >= availableSlots) break
-        const campaign = (lead as unknown as { campaigns: { status: string; work_hours: WorkHours; timezone: string; daily_call_cap: number } }).campaigns
+        const campaign = (lead as unknown as { campaigns: { status: string; work_hours: WorkHours; timezone: string; daily_call_cap: number; max_qualified_leads: number; industry: string | null; agent_id: string | null } }).campaigns
         if (!campaign) continue
         // Belt and suspenders: n8n's own Validate E164 & Build Payload node checks this too
         // (checklist D.6), but a malformed number shouldn't consume a candidate-pool slot or a
         // daily-cap count on its way to being rejected downstream.
-        if (!E164.test(lead.phone ?? '')) continue
+        if (!E164.test(lead.phone ?? '')) {
+          skippedBadPhone++
+          continue
+        }
+
+        // §A.2 — THE single most important implementation detail in §A: this runs BEFORE
+        // reserve_leads() ever sees this lead, as a candidate filter, never as a post-hoc filter
+        // on the results. reserve_leads() flips a lead to call_status='dialing', increments
+        // retry_count, and sets last_called_at — so filtering an unmapped lead out AFTER
+        // reservation would (1) strand a concurrency slot with no call ever placed to release it
+        // (occupied_slots counts 'dialing' rows), (2) sit stuck until the 30-minute sweep, and
+        // (3) get reserved and incremented again next tick — permanently exhausting
+        // MAX_RETRY_COUNT after 3 passes and killing the lead, all because someone simply hasn't
+        // pasted an assistant id yet. Skipping as a CANDIDATE costs nothing. Placed before the
+        // qualified-cap/daily-cap blocks below too, so an undialable lead can't burn a
+        // daily-cap slot or spend either COUNT query on a budget it could never use.
+        const industryKey = normalizeIndustryKey(campaign.industry)
+        const assistantId = assistantIdByIndustry.get(industryKey)
+        if (!assistantId) {
+          skippedUnmappedIndustry++
+          unmappedIndustries.add(campaign.industry?.trim() || '(none)')
+          continue
+        }
 
         const tz = lead.timezone || campaign.timezone || 'UTC'
-        if (!isWithinWorkHours(now, tz, campaign.work_hours)) continue
+        if (!isWithinWorkHours(now, tz, campaign.work_hours)) {
+          skippedOutsideHours++
+          continue
+        }
+
+        // §E.11 — Max Qualified Leads, checked BEFORE the daily-cap COUNT below, so a campaign
+        // that's already capped out doesn't spend a query on a budget it can't use.
+        //
+        // §E.12 — what this catches that call-ingest's §E.6 cannot: a cap LOWERED after the fact,
+        // below a qualified count already reached. §E.6 only fires on a *new* qualification, so it
+        // never re-evaluates a campaign whose count was already past its (previously higher) cap.
+        // This path deliberately only SKIPS the campaign — it does not flip status to 'completed'
+        // the way §E.6 does. Lowering a cap under the current count is a deliberate admin action
+        // (they know they're stopping it); §E.6 owns the "campaign finished on its own" status
+        // transition. (predicate mirrors src/lib/callPipeline.ts's isQualifiedCapReached;
+        // max_qualified_leads = 0 means unlimited.)
+        const campaignId = lead.campaign_id as string
+        if (!qualifiedCapReached.has(campaignId)) {
+          const qualCap = campaign.max_qualified_leads ?? 0
+          if (qualCap <= 0) {
+            qualifiedCapReached.set(campaignId, false)
+          } else {
+            const { count: qualifiedSoFar, error: qualifiedError } = await supabase
+              .from('call_records')
+              .select('id', { count: 'exact', head: true })
+              .eq('campaign_id', campaignId)
+              .eq('is_qualified', true)
+            if (qualifiedError) return jsonError(500, 'failed to compute qualified cap', qualifiedError.message)
+            qualifiedCapReached.set(campaignId, (qualifiedSoFar ?? 0) >= qualCap)
+          }
+        }
+        if (qualifiedCapReached.get(campaignId)) {
+          skippedQualifiedCap++
+          continue
+        }
 
         if (!capRemaining.has(lead.campaign_id as string)) {
           const { count: dialedToday, error: dialedError } = await supabase
@@ -188,7 +292,10 @@ serve(async (req) => {
         }
 
         const remaining = capRemaining.get(lead.campaign_id as string) ?? 0
-        if (remaining <= 0) continue
+        if (remaining <= 0) {
+          skippedDailyCap++
+          continue
+        }
         capRemaining.set(lead.campaign_id as string, remaining - 1)
         selected.push(lead)
       }
@@ -212,17 +319,88 @@ serve(async (req) => {
       }
       const reservedLeads = selected.filter((l) => reservedIds.has(l.id as string))
 
+      // §A.1f — batch-fetch agents for the reserved leads ONLY, not every candidate scanned
+      // (most candidates never reach reservation at all).
+      type ReservedCampaign = { industry: string | null; agent_id: string | null }
+      const reservedCampaignOf = (l: (typeof reservedLeads)[number]) =>
+        (l as unknown as { campaigns: ReservedCampaign }).campaigns
+      const agentIds = new Set<string>()
+      for (const l of reservedLeads) {
+        const agentId = reservedCampaignOf(l)?.agent_id
+        if (agentId) agentIds.add(agentId)
+      }
+      type AgentRow = { id: string; name: string | null; script: string | null; welcome_message: string | null; voice: string | null }
+      const agentsById = new Map<string, AgentRow>()
+      if (agentIds.size > 0) {
+        const { data: agentRows, error: agentsError } = await supabase
+          .from('ai_agents')
+          .select('id, name, script, welcome_message, voice')
+          .in('id', Array.from(agentIds))
+        if (agentsError) return jsonError(500, 'failed to fetch agents', agentsError.message)
+        for (const a of (agentRows ?? []) as AgentRow[]) agentsById.set(a.id, a)
+      }
+
+      // §A.1g — company names (E17): leads.user_id references auth.users, not profiles, so it
+      // can't be embedded in the leads query above — a separate `.in()` call is required.
+      const userIds = new Set<string>(reservedLeads.map((l) => l.user_id as string))
+      const companyNameByUserId = new Map<string, string>()
+      if (userIds.size > 0) {
+        const { data: profileRows, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, company_name')
+          .in('id', Array.from(userIds))
+        if (profilesError) return jsonError(500, 'failed to fetch company names', profilesError.message)
+        for (const p of (profileRows ?? []) as Array<{ id: string; company_name: string | null }>) {
+          companyNameByUserId.set(p.id, p.company_name ?? '')
+        }
+      }
+
       return jsonOk({
-        leads: reservedLeads.map((l) => ({
-          lead_id: l.id,
-          user_id: l.user_id,
-          campaign_id: l.campaign_id,
-          first_name: l.first_name,
-          phone: l.phone,
-          external_ref: l.external_ref,
-        })),
+        leads: reservedLeads.map((l) => {
+          const campaign = reservedCampaignOf(l)
+          const agent = campaign?.agent_id ? agentsById.get(campaign.agent_id) : undefined
+          // §A.3b/§A.5 — every string coerced to '', NEVER left undefined. n8n's own Validate
+          // node re-coerces with String(v ?? '') and Place Call's body has `|| ""` on each
+          // variable too — three layers, because JSON.stringify DROPS keys whose value is
+          // undefined entirely, turning "missing value" into "missing key", which is exactly
+          // what makes Vapi read a literal "{{brace}}" placeholder aloud instead of substituting.
+          return {
+            lead_id: l.id,
+            user_id: l.user_id,
+            campaign_id: l.campaign_id,
+            first_name: l.first_name ?? '',
+            phone: l.phone,
+            // §A.6 — spoken variables, not just the dialing target. `phone` above is also
+            // reused for this (n8n's Place Call node passes it as both `customer.number` AND
+            // the `phone_number` variableValue) — one field, two uses, deliberately not
+            // duplicated here.
+            email: l.email ?? '',
+            external_ref: l.external_ref,
+            // §A.3 — never null: every lead reaching this point already passed the "has a
+            // mapped assistant" candidate check above (§A.2).
+            assistant_id: assistantIdByIndustry.get(normalizeIndustryKey(campaign?.industry)) ?? '',
+            industry: campaign?.industry ?? '',
+            agent_name: agent?.name ?? '',
+            extra_instructions: agent?.script ?? '',
+            welcome_message: agent?.welcome_message ?? '',
+            company_name: companyNameByUserId.get(l.user_id as string) ?? '',
+            voice_id: agent?.voice ?? '',
+          }
+        }),
         occupied_slots: occupiedSlots ?? 0,
         available_slots: availableSlots,
+        // §A.3c/§A.3e — NOT optional polish (see the comment where these counters are
+        // incremented, above). Without them, "the assistant table is empty" and "it's 3am" are
+        // both an empty `leads: []` plus an HTTP 200 — indistinguishable, and n8n is green
+        // either way.
+        skipped: {
+          unmapped_industry: skippedUnmappedIndustry,
+          outside_hours: skippedOutsideHours,
+          bad_phone: skippedBadPhone,
+          daily_cap: skippedDailyCap,
+          qualified_cap: skippedQualifiedCap,
+        },
+        unmapped_industries: Array.from(unmappedIndustries),
       })
     }
 

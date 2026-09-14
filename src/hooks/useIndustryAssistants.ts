@@ -26,13 +26,23 @@ export function useIndustryAssistants() {
 // §E.14 — super admin pastes an assistant id per industry and saves. Upsert (not insert): the
 // primary key is `industry` itself, so re-saving an already-mapped industry updates the existing
 // row rather than erroring on a duplicate key.
+//
+// Client-feedback plan §B.8 — the payload now also carries `starterInstructions` (the admin
+// override for the agent-wizard starter text), and `vapiAssistantId` is optional: a row may carry
+// starter text alone. The DB CHECK constraint industry_assistants_not_empty rejects a fully-blank
+// row; callers (VapiAssistantsTab) validate before getting here.
 export function useSetIndustryAssistant() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ industry, vapiAssistantId, label }: { industry: string; vapiAssistantId: string; label?: string }) => {
+    mutationFn: async ({ industry, vapiAssistantId, starterInstructions, label }: { industry: string; vapiAssistantId?: string; starterInstructions?: string; label?: string }) => {
       const { error } = await supabase
         .from("industry_assistants")
-        .upsert({ industry, vapi_assistant_id: vapiAssistantId, label: label || null }, { onConflict: "industry" });
+        .upsert({
+          industry,
+          vapi_assistant_id: vapiAssistantId?.trim() || null,
+          starter_instructions: starterInstructions?.trim() || null,
+          label: label || null,
+        }, { onConflict: "industry" });
       if (error) throw error;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),

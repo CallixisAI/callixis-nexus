@@ -13,6 +13,13 @@ import {
   qualifiedRate,
   formatPercent,
   engineStatus,
+  isQualifiedCapReached,
+  describeAttempts,
+  endedReasonLabel,
+  attemptSummaryLine,
+  formatRetryTime,
+  isLeadPoolExhausted,
+  campaignCompletionReason,
   STUCK_CALL_MINUTES,
   MAX_RETRY_COUNT,
   type LeadBucketInput,
@@ -61,12 +68,33 @@ describe("normalizeLeadCallStatus", () => {
 });
 
 describe("normalizeCampaignStatus", () => {
-  it("passes through active/scheduled, folds everything else to paused", () => {
+  it("passes through active/scheduled/completed, folds everything else to paused", () => {
     expect(normalizeCampaignStatus("active")).toBe("active");
     expect(normalizeCampaignStatus("scheduled")).toBe("scheduled");
     expect(normalizeCampaignStatus("paused")).toBe("paused");
+    // §E.2 — "completed" is reachable again (§E.6 writes it) and must not fall into the paused
+    // default, which would make a finished campaign look manually paused.
+    expect(normalizeCampaignStatus("completed")).toBe("completed");
     expect(normalizeCampaignStatus("anything-else")).toBe("paused");
     expect(normalizeCampaignStatus(null)).toBe("paused");
+  });
+});
+
+describe("isQualifiedCapReached (client-feedback §E)", () => {
+  it("is not reached below the cap", () => {
+    expect(isQualifiedCapReached(0, 50)).toBe(false);
+    expect(isQualifiedCapReached(49, 50)).toBe(false);
+  });
+
+  it("is reached at the cap and beyond it (a cap lowered under an existing count — §E.10's job)", () => {
+    expect(isQualifiedCapReached(50, 50)).toBe(true);
+    expect(isQualifiedCapReached(51, 50)).toBe(true);
+    expect(isQualifiedCapReached(200, 5)).toBe(true);
+  });
+
+  it("treats 0 as unlimited — never reached, matching the UI's '0 = unlimited' copy", () => {
+    expect(isQualifiedCapReached(0, 0)).toBe(false);
+    expect(isQualifiedCapReached(9999, 0)).toBe(false);
   });
 });
 
@@ -236,5 +264,158 @@ describe("three pages, one number (E9 fixture)", () => {
 
     expect(leadCounts).toEqual({ total: 2, queued: 1, dialing: 0, stalled: 1, called: 0, excluded: 0 });
     expect(callCounts).toEqual({ total: 4, attempted: 0, completed: 0, noAnswer: 0, failed: 0, unattributed: 4 });
+  });
+});
+
+// 2026-09-11 — auto-complete a campaign when its lead pool is spent, not just when the
+// qualified-leads cap is hit.
+describe("isLeadPoolExhausted", () => {
+  const counts = (over: Partial<ReturnType<typeof countLeads>> = {}) => ({
+    total: 10, queued: 0, dialing: 0, stalled: 0, called: 10, excluded: 0, ...over,
+  });
+
+  it("is true when nothing is queued, dialing or stalled", () => {
+    expect(isLeadPoolExhausted(counts())).toBe(true);
+  });
+
+  it("counts a DNC/retry-exhausted lead as finished, not as work remaining", () => {
+    expect(isLeadPoolExhausted(counts({ called: 7, excluded: 3 }))).toBe(true);
+  });
+
+  it("is false while a lead is still queued — including one whose retry is scheduled for later", () => {
+    // bucketLead ignores next_call_at, so a future retry is still `queued`. This is the case
+    // that would otherwise auto-complete every campaign overnight.
+    expect(isLeadPoolExhausted(counts({ queued: 1, called: 9 }))).toBe(false);
+  });
+
+  it("is false while a call is in flight", () => {
+    expect(isLeadPoolExhausted(counts({ dialing: 1, called: 9 }))).toBe(false);
+  });
+
+  it("is false while a lead is stalled — the sweeper will reset and redial it", () => {
+    expect(isLeadPoolExhausted(counts({ stalled: 1, called: 9 }))).toBe(false);
+  });
+
+  it("is false for a campaign with no leads at all — empty is not finished", () => {
+    expect(isLeadPoolExhausted(counts({ total: 0, called: 0 }))).toBe(false);
+  });
+});
+
+describe("campaignCompletionReason", () => {
+  const spent = { total: 5, queued: 0, dialing: 0, stalled: 0, called: 5, excluded: 0 };
+  const working = { total: 5, queued: 3, dialing: 0, stalled: 0, called: 2, excluded: 0 };
+
+  it("reports the cap when the qualified target was reached", () => {
+    expect(campaignCompletionReason(10, 10, working)).toBe("cap-reached");
+  });
+
+  it("prefers the cap when both endings apply — it means leads may still be worth calling", () => {
+    expect(campaignCompletionReason(10, 10, spent)).toBe("cap-reached");
+  });
+
+  it("reports exhaustion when the pool is spent and no cap was hit", () => {
+    expect(campaignCompletionReason(3, 10, spent)).toBe("leads-exhausted");
+  });
+
+  it("treats a 0 cap as unlimited, so it never explains the ending", () => {
+    expect(campaignCompletionReason(99, 0, working)).toBeNull();
+  });
+
+  it("returns null when neither ending explains it (e.g. new leads were added afterwards)", () => {
+    expect(campaignCompletionReason(3, 10, working)).toBeNull();
+  });
+});
+
+// 2026-09-11 — a dialled-and-busy lead must not render identically to an untouched one.
+describe("describeAttempts / endedReasonLabel", () => {
+  const NOW = Date.parse("2026-09-11T10:10:00Z");
+
+  it("returns null for a lead that has never been dialled", () => {
+    expect(describeAttempts({ retryCount: 0 }, NOW)).toBeNull();
+    expect(describeAttempts({}, NOW)).toBeNull();
+  });
+
+  it("describes the real live case: attempted once, line busy, retry tonight", () => {
+    // Lead +639460314690 on "Test James 5", exactly as the database held it.
+    const info = describeAttempts(
+      { retryCount: 1, endedReason: "customer-busy", nextCallAt: "2026-09-11T14:07:35.864Z" },
+      NOW,
+    );
+    expect(info).toEqual({
+      attemptsMade: 1,
+      attemptsAllowed: 3,
+      reasonLabel: "Line busy",
+      rawReason: "customer-busy",
+      retryAt: "2026-09-11T14:07:35.864Z",
+      attemptsExhausted: false,
+    });
+  });
+
+  it("does not promise a future retry when next_call_at has already passed", () => {
+    // That retry is due NOW — the dispatcher is about to take it.
+    const info = describeAttempts(
+      { retryCount: 1, endedReason: "customer-busy", nextCallAt: "2026-09-11T09:00:00Z" },
+      NOW,
+    );
+    expect(info?.retryAt).toBeNull();
+  });
+
+  it("flags a lead that has used all its attempts", () => {
+    const info = describeAttempts({ retryCount: 3, endedReason: "customer-did-not-answer" }, NOW);
+    expect(info?.attemptsExhausted).toBe(true);
+  });
+
+  it("keeps an unmapped reason out of the friendly label but never loses it", () => {
+    const info = describeAttempts({ retryCount: 1, endedReason: "pipeline-error-openai-llm-failed" }, NOW);
+    expect(info?.reasonLabel).toBeNull();
+    expect(info?.rawReason).toBe("pipeline-error-openai-llm-failed");
+  });
+
+  it("maps the reasons a salesperson actually needs to tell apart", () => {
+    expect(endedReasonLabel("customer-busy")).toBe("Line busy");
+    expect(endedReasonLabel("customer-did-not-answer")).toBe("No answer");
+    expect(endedReasonLabel("customer-ended-call")).toBe("They hung up");
+    expect(endedReasonLabel("silence-timed-out")).toBe("No response heard");
+    expect(endedReasonLabel(null)).toBeNull();
+    expect(endedReasonLabel("something-new-from-vapi")).toBeNull();
+  });
+});
+
+describe("attemptSummaryLine / formatRetryTime", () => {
+  const NOW = Date.parse("2026-09-11T10:10:00Z");
+
+  it("renders nothing for an untouched lead", () => {
+    expect(attemptSummaryLine(null, NOW)).toBeNull();
+  });
+
+  it("leads with the attempt count and includes the reason when one is known", () => {
+    const line = attemptSummaryLine(
+      describeAttempts({ retryCount: 1, endedReason: "customer-busy", nextCallAt: "2026-09-11T14:07:35.864Z" }, NOW),
+      NOW,
+    );
+    // The retry time is rendered in the viewer's own zone, so assert the stable parts only.
+    expect(line).toContain("Attempt 1 of 3");
+    expect(line).toContain("Line busy");
+    expect(line).toContain("retrying");
+  });
+
+  it("says so plainly when no attempts remain, instead of promising a retry", () => {
+    const line = attemptSummaryLine(describeAttempts({ retryCount: 3 }, NOW), NOW);
+    expect(line).toContain("no attempts left");
+    expect(line).not.toContain("retrying");
+  });
+
+  it("falls back to 'retrying shortly' when nothing is scheduled yet", () => {
+    expect(attemptSummaryLine(describeAttempts({ retryCount: 1 }, NOW), NOW)).toContain("retrying shortly");
+  });
+
+  it("formatRetryTime returns null for absent or unparseable input", () => {
+    expect(formatRetryTime(null, NOW)).toBeNull();
+    expect(formatRetryTime("not a date", NOW)).toBeNull();
+  });
+
+  it("formatRetryTime adds a weekday once the retry is not today", () => {
+    const tomorrow = formatRetryTime("2026-09-12T09:00:00Z", NOW);
+    expect(tomorrow).toMatch(/^[A-Za-z]{3}\s/);
   });
 });

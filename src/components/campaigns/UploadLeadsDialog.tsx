@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Campaign } from "./types";
+import { UNASSIGNED_CAMPAIGN_ID } from "@/hooks/useCampaigns";
+import { useDraftState } from "@/hooks/useDraftState";
 import { buildLeadPreview, type LeadPreview, type RawCsvRow } from "@/lib/leadCsv";
 import { fireDispatchTrigger, shouldFireLeadsUploadedTrigger } from "@/lib/dispatchTrigger";
 
@@ -20,7 +22,12 @@ interface UploadLeadsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   campaigns: Campaign[];
+  // Client-feedback plan §H — `defaultCampaignId` only *seeds* the picker (which stays fully
+  // changeable). `lockedCampaignId` pins it: no picker at all, just a read-only line. The
+  // per-campaign "Add Data" button sets `lockedCampaignId`; the header "Upload Data" button
+  // leaves both undefined and gets the full picker.
   defaultCampaignId?: string;
+  lockedCampaignId?: string;
   addLeads: (args: { campaignId: string; rows: LeadPreview["validRows"]; onProgress?: (done: number, total: number) => void }) => Promise<{ inserted: number; attempted: number }>;
 }
 
@@ -40,18 +47,34 @@ const downloadExampleCSV = () => {
   URL.revokeObjectURL(url);
 };
 
-const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, addLeads }: UploadLeadsDialogProps) => {
+const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, lockedCampaignId, addLeads }: UploadLeadsDialogProps) => {
   const { user } = useAuth();
   const [step, setStep] = useState<Step>("select");
-  const [campaignId, setCampaignId] = useState(defaultCampaignId ?? "");
   const [preview, setPreview] = useState<LeadPreview | null>(null);
   const [existingDuplicateCount, setExistingDuplicateCount] = useState(0);
   const [isChecking, setIsChecking] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
 
+  // Client-feedback plan §G.8 — only the campaign *choice* persists. The CSV preview derives from
+  // a File object, which cannot be serialised to localStorage, so restoring the campaign and
+  // re-asking for the file is the honest behaviour (the UI says so). Not used when locked — the
+  // per-campaign "Add Data" path has a fixed target already.
+  const { value: draftCampaignId, setValue: setDraftCampaignId, clearDraft: clearCampaignDraft, restored } =
+    useDraftState<string>("upload-leads-campaign", defaultCampaignId ?? "", user?.id);
+
+  // §H.2 — when locked, the target is pinned to lockedCampaignId; otherwise it's the (persisted)
+  // picker choice.
+  const campaignId = lockedCampaignId ?? draftCampaignId;
+  const lockedCampaign = lockedCampaignId ? campaigns.find((c) => c.id === lockedCampaignId) : undefined;
+  // §H.5 — the pseudo-campaign "Unassigned Leads" (useCampaigns' UNASSIGNED_CAMPAIGN_ID) is not a
+  // real campaigns row; you can't upload into it. Keep it out of the picker.
+  const pickableCampaigns = campaigns.filter((c) => c.id !== UNASSIGNED_CAMPAIGN_ID);
+
+  // §G — resets the transient bits (step/preview/file-derived counts) but KEEPS the campaign
+  // draft, so Esc / click-outside leave the choice waiting. Only cancel() and a successful
+  // upload clear the draft.
   const reset = () => {
     setStep("select");
-    setCampaignId(defaultCampaignId ?? "");
     setPreview(null);
     setExistingDuplicateCount(0);
     setProgress({ done: 0, total: 0 });
@@ -60,6 +83,12 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, a
   const close = () => {
     onOpenChange(false);
     reset();
+  };
+
+  // §G.10 — the explicit clears.
+  const cancel = () => {
+    clearCampaignDraft();
+    close();
   };
 
   const handleFile = (file: File | undefined) => {
@@ -113,7 +142,7 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, a
     setProgress({ done: 0, total: preview.validRows.length });
     try {
       const result = await addLeads({
-        campaignId,
+        campaignId: campaignId,
         rows: preview.validRows,
         onProgress: (done, total) => setProgress({ done, total }),
       });
@@ -130,6 +159,8 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, a
         `Added ${result.inserted} lead${result.inserted === 1 ? "" : "s"}` +
           (skipped > 0 ? ` (${skipped} already existed and were skipped)` : "")
       );
+      // §G.10 — a successful upload clears the persisted campaign choice.
+      clearCampaignDraft();
       close();
     } catch (err) {
       toast.error(`Upload failed: ${errorMessage(err)}`);
@@ -148,15 +179,29 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, a
 
         {step === "select" && (
           <div className="space-y-4 pt-2">
-            <div className="space-y-2">
-              <Label className="text-sm text-muted-foreground">Select Campaign</Label>
-              <Select value={campaignId} onValueChange={setCampaignId}>
-                <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="Choose a campaign..." /></SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {campaigns.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
-                </SelectContent>
-              </Select>
-            </div>
+            {lockedCampaignId ? (
+              // §H.2 — "Add Data" from inside a campaign: fixed target, no picker to change it.
+              <div className="space-y-1">
+                <Label className="text-sm text-muted-foreground">Adding leads to</Label>
+                <p className="text-sm font-medium text-foreground">
+                  {lockedCampaign?.name ?? "this campaign"}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label className="text-sm text-muted-foreground">Select Campaign</Label>
+                <Select value={campaignId} onValueChange={setDraftCampaignId}>
+                  <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="Choose a campaign..." /></SelectTrigger>
+                  <SelectContent className="bg-card border-border">
+                    {pickableCampaigns.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+                  </SelectContent>
+                </Select>
+                {/* §G.8 — the CSV file can't be saved to a draft, only the campaign choice. */}
+                {restored && campaignId && (
+                  <p className="text-xs text-primary/80">Campaign remembered from before — re-select your CSV file to continue.</p>
+                )}
+              </div>
+            )}
             <div className="space-y-2">
               <Label className="text-sm text-muted-foreground">Upload File (CSV)</Label>
               <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary/40 transition-colors">
@@ -175,6 +220,11 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, a
               </div>
               <p className="text-xs text-muted-foreground">Country Code, Name, Surname, Email, Phone, Source, Notes</p>
               <p className="text-xs text-muted-foreground mt-1">Phone numbers are normalized to E.164 before anything is saved.</p>
+            </div>
+            {/* §G.10 — Cancel is the explicit clear. Closing with Esc / the X keeps the campaign
+                choice for next time. */}
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" className="text-xs" onClick={cancel}>Cancel</Button>
             </div>
           </div>
         )}

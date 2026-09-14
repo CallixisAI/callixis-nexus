@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Plus, Clock, Users, Globe, Briefcase, Bot } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Clock, Users, Globe, Briefcase, Bot, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,8 +21,10 @@ import {
 import { toast } from "sonner";
 import { Campaign, ALL_DAYS, WorkHours } from "./types";
 import { INDUSTRIES } from "@/lib/industries";
+import { TIMEZONES, detectBrowserTimezone } from "@/lib/timezones";
 import type { AiAgentRow } from "@/hooks/useAgents";
 import { useAuth } from "@/contexts/AuthContext";
+import { useDraftState } from "@/hooks/useDraftState";
 
 interface CreateCampaignDialogProps {
   onCreated: (campaign: Campaign) => void;
@@ -37,20 +40,55 @@ const defaultWorkHours: WorkHours = {
   endTime: "17:00",
 };
 
+// Client-feedback plan §G.7 — every field on this form persists as one draft object so a
+// half-filled campaign survives Esc / click-outside / navigating away. Cleared only by Cancel or
+// a successful create (§G.10).
+interface CampaignDraft {
+  name: string;
+  industry: string;
+  agentId: string;
+  workHours: WorkHours;
+  maxLeads: number;
+  crmEndpoint: string;
+  // Call-quality plan §C.3 — detected once when the draft is first created, not re-detected on
+  // every render (a browser's own zone doesn't change mid-session). The value itself, not just a
+  // display hint — §C.2 is what makes this actually reach the database insert.
+  timezone: string;
+}
+
+const emptyCampaignDraft = (): CampaignDraft => ({
+  name: "",
+  industry: "",
+  agentId: "",
+  workHours: defaultWorkHours,
+  maxLeads: 0,
+  crmEndpoint: "",
+  timezone: detectBrowserTimezone(),
+});
+
 const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) => {
   // Permission-overrides plan Phase 4 §H.4 (docs/permission-overrides-plan/README.md) —
   // campaigns.create_delete. Only super_admin/admin/sales_manager hold it (all at `full`, no
   // partial grants exist), so presence is the whole gate.
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  const navigate = useNavigate();
   const canCreateOrDelete = hasPermission("campaigns.create_delete");
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [industry, setIndustry] = useState("");
-  const [agentId, setAgentId] = useState<string>("");
-  const [workHours, setWorkHours] = useState<WorkHours>(defaultWorkHours);
-  const [maxLeads, setMaxLeads] = useState(0);
-  const [crmEndpoint, setCrmEndpoint] = useState("");
-  const [startImmediately, setStartImmediately] = useState(false);
+
+  const initialDraft = useMemo(emptyCampaignDraft, []);
+  const { value: draft, setValue: setDraft, clearDraft, restored } = useDraftState<CampaignDraft>(
+    "create-campaign",
+    initialDraft,
+    user?.id,
+  );
+  const { name, industry, agentId, workHours, maxLeads, crmEndpoint, timezone } = draft;
+  const patch = (p: Partial<CampaignDraft>) => setDraft((d) => ({ ...d, ...p }));
+
+  // §C.3 — the detected zone always appears as a selectable option even when it isn't one of the
+  // curated TIMEZONES entries (the curated list is ~30 common zones; a real browser can report
+  // any of ~400). Without this, a Select whose current value isn't among its own items renders
+  // as if nothing were selected, even though the underlying (correct) value is still there.
+  const timezoneOptions = useMemo(() => Array.from(new Set([timezone, ...TIMEZONES])), [timezone]);
 
   // §D.2 — filtered to the campaign's chosen industry, so two agents that both happen to serve
   // "Medical" don't get offered on an "Insurance" campaign by mistake (D-1's whole reason to
@@ -60,25 +98,40 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
     [agents, industry],
   );
 
+  // §F.3 — an industry the user has picked that has no agents at all: creation is blocked and the
+  // form points at the AI Agents page rather than offering an "Unassigned" escape hatch.
+  const industryHasNoAgents = industry !== "" && agentsForIndustry.length === 0;
+
   const toggleDay = (day: string) => {
-    setWorkHours((prev) => ({
-      ...prev,
-      days: prev.days.includes(day)
-        ? prev.days.filter((d) => d !== day)
-        : [...prev.days, day],
+    setDraft((d) => ({
+      ...d,
+      workHours: {
+        ...d.workHours,
+        days: d.workHours.days.includes(day)
+          ? d.workHours.days.filter((x) => x !== day)
+          : [...d.workHours.days, day],
+      },
     }));
   };
 
-  const resetForm = () => {
-    setName("");
-    setIndustry("");
-    setAgentId("");
-    setWorkHours(defaultWorkHours);
-    setMaxLeads(0);
-    setCrmEndpoint("");
-    setStartImmediately(false);
+  // §G.10 — the only two ways a draft is cleared.
+  const cancel = () => {
+    clearDraft();
+    setOpen(false);
   };
 
+  const goToAgents = () => {
+    // §G — navigating away KEEPS the draft; this is not a Cancel.
+    setOpen(false);
+    navigate("/ai-agents");
+  };
+
+  // 2026-09-11 — "Create & Start Now" was removed, so a newly-created campaign is ALWAYS
+  // Scheduled. A brand-new campaign has zero leads (they are uploaded afterwards via "Add
+  // Data"), so starting it here could never dial anyone; worse, it bypassed StartCampaignDialog
+  // and with it the blocking company-name gate, the 0-leads-queued warning, and the
+  // qualified-leads cap warning. The campaign row's own ▶ button is the one start path now.
+  // (This also retires §F.6/§X.1's `startNow` parameter — it only ever had one caller left.)
   const handleCreate = () => {
     if (!name.trim()) {
       toast.error("Campaign name is required");
@@ -88,13 +141,20 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
       toast.error("Please select an industry");
       return;
     }
+    // §F.1 — the agent is mandatory now. (The submit buttons are also disabled when the chosen
+    // industry has no agents at all — §F.4 — so this toast is for the "agents exist, none
+    // picked" case.)
+    if (!agentId) {
+      toast.error("Please select an AI agent for this campaign");
+      return;
+    }
 
     const agentName = agents.find((a) => a.id === agentId)?.name || "Unassigned";
 
     const newCampaign: Campaign = {
       id: crypto.randomUUID(),
       name: name.trim(),
-      status: startImmediately ? "Active" : "Scheduled",
+      status: "Scheduled",
       callsAttempted: 0,
       connectRate: 0,
       qualifiedRate: 0,
@@ -110,11 +170,15 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
       leadsTotal: 0,
       leadCounts: { total: 0, queued: 0, dialing: 0, stalled: 0, called: 0, excluded: 0 },
       dailyCallCap: 100,
-      timezone: "UTC",
+      // §C.2/§C.3 — the detected (or user-changed) zone, not a hardcoded "UTC". This is what
+      // actually reaches the database now that useCampaigns.ts's createMutation inserts it.
+      timezone,
     };
 
     onCreated(newCampaign);
-    resetForm();
+    // §G.10 — a successful create clears the draft (the dialog closes optimistically, same as
+    // before this change).
+    clearDraft();
     setOpen(false);
   };
 
@@ -122,8 +186,9 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
     <Dialog
       open={open}
       onOpenChange={(v) => {
+        // §G.9 — closing (Esc / click-outside / the X) no longer wipes the form. Only `cancel()`
+        // and a successful create do.
         setOpen(v);
-        if (!v) resetForm();
       }}
     >
       <DialogTrigger asChild>
@@ -140,6 +205,10 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
           </DialogTitle>
         </DialogHeader>
 
+        {restored && (
+          <p className="text-xs text-primary/80">Draft restored — your previous entries are still here. Cancel to start fresh.</p>
+        )}
+
         <div className="space-y-5 pt-1">
           {/* Name & Industry */}
           <div className="space-y-3">
@@ -153,7 +222,7 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
               </Label>
               <Input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => patch({ name: e.target.value })}
                 className="bg-secondary border-border text-sm"
                 placeholder="e.g. Spring Real Estate Push"
                 maxLength={100}
@@ -164,7 +233,7 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                 <Label className="text-xs text-muted-foreground">
                   Industry
                 </Label>
-                <Select value={industry} onValueChange={(v) => { setIndustry(v); setAgentId(""); }}>
+                <Select value={industry} onValueChange={(v) => patch({ industry: v, agentId: "" })}>
                   <SelectTrigger className="bg-secondary border-border text-sm">
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
@@ -181,12 +250,15 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                 <Label className="text-xs text-muted-foreground">
                   AI Agent
                 </Label>
-                {/* §D.3 — an industry with zero agents isn't an error state; the campaign can
-                    still be created "Unassigned" and pointed at an agent later once one exists
-                    (CampaignSettingsDialog, §D.5). Required-and-empty would be a dead end. */}
-                <Select value={agentId} onValueChange={setAgentId} disabled={!industry || agentsForIndustry.length === 0}>
+                {/* §F.1/§F.2 — the agent is required on create now (AI Agents plan Phase 3 made
+                    campaigns.agent_id actually reach the engine, so an unassigned campaign is a
+                    campaign that can't call anyone). The old "optional" placeholder and
+                    "…start Unassigned" helper are gone. §F.5: edit (CampaignSettingsDialog) still
+                    allows Unassigned — every existing campaign is Unassigned and that must stay
+                    representable. */}
+                <Select value={agentId} onValueChange={(v) => patch({ agentId: v })} disabled={!industry || industryHasNoAgents}>
                   <SelectTrigger className="bg-secondary border-border text-sm">
-                    <SelectValue placeholder={!industry ? "Pick an industry first" : agentsForIndustry.length === 0 ? "No agents yet — optional" : "Unassigned"} />
+                    <SelectValue placeholder={!industry ? "Pick an industry first" : industryHasNoAgents ? "No agents for this industry" : "Select an agent"} />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border">
                     {agentsForIndustry.map((a) => (
@@ -199,13 +271,28 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                     ))}
                   </SelectContent>
                 </Select>
-                {industry && agentsForIndustry.length === 0 && (
-                  <p className="text-[11px] text-muted-foreground">
-                    No agents for "{industry}" yet — create one in AI Agents, or start this campaign Unassigned.
-                  </p>
-                )}
               </div>
             </div>
+
+            {/* §F.3 — industry chosen, no agents exist for it. Creation is blocked; point at the
+                fix rather than offering an Unassigned campaign that can never call anyone. */}
+            {industryHasNoAgents && (
+              <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3 space-y-2">
+                <p className="text-xs text-foreground">
+                  No AI agent exists for <span className="font-medium">{industry}</span> yet.
+                  Create one on the AI Agents page first.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs border-border"
+                  onClick={goToAgents}
+                >
+                  Go to AI Agents <ArrowRight className="h-3 w-3 ml-1" />
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Work Hours */}
@@ -244,10 +331,7 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                   type="time"
                   value={workHours.startTime}
                   onChange={(e) =>
-                    setWorkHours((prev) => ({
-                      ...prev,
-                      startTime: e.target.value,
-                    }))
+                    setDraft((d) => ({ ...d, workHours: { ...d.workHours, startTime: e.target.value } }))
                   }
                   className="bg-secondary border-border text-sm"
                 />
@@ -260,14 +344,34 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                   type="time"
                   value={workHours.endTime}
                   onChange={(e) =>
-                    setWorkHours((prev) => ({
-                      ...prev,
-                      endTime: e.target.value,
-                    }))
+                    setDraft((d) => ({ ...d, workHours: { ...d.workHours, endTime: e.target.value } }))
                   }
                   className="bg-secondary border-border text-sm"
                 />
               </div>
+            </div>
+            {/* Call-quality plan §C.3 — states the detected zone in plain words and lets it be
+                changed before creating. §C.2 is what makes this value actually reach the
+                database; this is just where it's chosen. */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Timezone</Label>
+              <Select value={timezone} onValueChange={(v) => patch({ timezone: v })}>
+                <SelectTrigger className="bg-secondary border-border text-sm">
+                  <SelectValue placeholder="Select…" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border max-h-64">
+                  {timezoneOptions.map((tz) => (
+                    <SelectItem key={tz} value={tz}>
+                      {tz}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Calls will go out {workHours.startTime}–{workHours.endTime}{" "}
+                <span className="font-medium text-foreground">{timezone}</span> — detected from this browser, change
+                it above if this account is managed from somewhere else.
+              </p>
             </div>
           </div>
 
@@ -285,7 +389,7 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
                 type="number"
                 min={0}
                 value={maxLeads}
-                onChange={(e) => setMaxLeads(Number(e.target.value))}
+                onChange={(e) => patch({ maxLeads: Number(e.target.value) })}
                 className="bg-secondary border-border text-sm"
                 placeholder="0 = unlimited"
               />
@@ -305,7 +409,7 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
               <Input
                 type="url"
                 value={crmEndpoint}
-                onChange={(e) => setCrmEndpoint(e.target.value)}
+                onChange={(e) => patch({ crmEndpoint: e.target.value })}
                 className="bg-secondary border-border text-sm"
                 placeholder="https://your-crm.com/api/leads"
               />
@@ -313,28 +417,24 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
           </div>
 
           <p className="text-xs text-muted-foreground -mt-2">
-            Add leads after creating the campaign, from the campaign's "Upload Data" button.
+            {/* §H.6 — the button inside a campaign is labelled "Add Data", not "Upload Data". */}
+            The campaign is created as <span className="text-foreground">Scheduled</span>. Add leads
+            with its "Add Data" button, then press ▶ on the campaign to start calling.
           </p>
 
           <div className="flex gap-2 pt-1">
-            <Button
-              variant="outline"
-              className="flex-1 border-border"
-              onClick={() => {
-                setStartImmediately(false);
-                handleCreate();
-              }}
-            >
-              Create as Scheduled
+            {/* §G.10 — the explicit Cancel that clears the draft. */}
+            <Button variant="ghost" className="border-border" onClick={cancel}>
+              Cancel
             </Button>
+            {/* §F.4 — disabled when the chosen industry has no agents at all, so nobody fills
+                the whole form only to be blocked on submit. */}
             <Button
               className="flex-1 glow-cyan"
-              onClick={() => {
-                setStartImmediately(true);
-                handleCreate();
-              }}
+              disabled={industryHasNoAgents}
+              onClick={handleCreate}
             >
-              Create & Start Now
+              Create Campaign
             </Button>
           </div>
         </div>

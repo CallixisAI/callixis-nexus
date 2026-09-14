@@ -19,11 +19,14 @@ describe("shouldFireLeadsUploadedTrigger", () => {
     expect(shouldFireLeadsUploadedTrigger({ status: "Paused" })).toBe(false);
   });
 
-  // counting-model plan C.9 — "Completed" removed from Campaign["status"] entirely: it was never
-  // a reachable value (campaigns.status is only ever active/paused/scheduled), so there is no
-  // longer a literal to test it against here.
   it("does not fire for a scheduled campaign", () => {
     expect(shouldFireLeadsUploadedTrigger({ status: "Scheduled" })).toBe(false);
+  });
+
+  // client-feedback plan §E re-added "Completed" (call-ingest §E.6 writes it once a campaign hits
+  // its qualified-leads cap). Uploading into a completed campaign must not auto-start dialing.
+  it("does not fire for a completed campaign", () => {
+    expect(shouldFireLeadsUploadedTrigger({ status: "Completed" })).toBe(false);
   });
 
   it("does not fire when the campaign is unknown", () => {

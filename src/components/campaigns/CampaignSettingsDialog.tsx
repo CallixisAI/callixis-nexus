@@ -5,14 +5,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
 import { Campaign, ALL_DAYS, WorkHours } from "./types";
+import { isValidIanaZone } from "@/lib/timezones";
 import type { AiAgentRow } from "@/hooks/useAgents";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface CampaignSettingsDialogProps {
   campaign: Campaign;
-  onSave: (id: string, updates: Partial<Campaign>) => void;
+  // Client-feedback plan §X.2 — widened from `=> void` so handleSave can await it. The parent
+  // (Campaigns.tsx's updateCampaignSettings) toasts the real outcome and re-throws on failure.
+  onSave: (id: string, updates: Partial<Campaign>) => void | Promise<void>;
   // AI Agents plan Phase 3 §D.5 — lets an existing campaign be re-pointed at a different (or no)
   // agent, same real list CreateCampaignDialog uses, filtered to this campaign's own industry.
   agents: AiAgentRow[];
@@ -28,12 +30,19 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
   const { hasPermission } = useAuth();
   const canEditSettings = hasPermission("campaigns.create_delete") || hasPermission("campaigns.start_pause_stop");
   const [open, setOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [workHours, setWorkHours] = useState<WorkHours>(campaign.workHours);
   const [maxLeads, setMaxLeads] = useState(campaign.maxQualifiedLeads);
   const [crmEndpoint, setCrmEndpoint] = useState(campaign.crmApiEndpoint);
   const [dailyCallCap, setDailyCallCap] = useState(campaign.dailyCallCap);
   const [timezone, setTimezone] = useState(campaign.timezone);
   const [agentId, setAgentId] = useState<string>(campaign.agentId || "");
+  // Call-quality plan §C.4 — validated on change (E9), so a typo (`Asia/Manilla`) can no longer
+  // save cleanly with a success toast and then silently stop the campaign forever. Mirrors the
+  // dispatcher's own `isWithinWorkHours()` check exactly (src/lib/timezones.ts's own comment) —
+  // a wrong-case zone like "ASIA/MANILA" is genuinely valid (verified against the real runtime,
+  // not assumed) and is correctly NOT flagged here.
+  const timezoneValid = isValidIanaZone(timezone);
 
   const agentsForIndustry = useMemo(
     () => agents.filter((a) => a.industry === campaign.industry),
@@ -49,17 +58,27 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
     }));
   };
 
-  const handleSave = () => {
-    onSave(campaign.id, {
-      workHours,
-      maxQualifiedLeads: maxLeads,
-      crmApiEndpoint: crmEndpoint,
-      dailyCallCap,
-      timezone,
-      agentId: agentId || null,
-    });
-    setOpen(false);
-    toast.success(`Settings updated for "${campaign.name}"`);
+  // §X.2 — was fire-and-forget: `onSave(...)` unawaited, then setOpen(false) + a success toast
+  // fired unconditionally, so a rejected save still closed the dialog AND told the user it
+  // worked. Now: await, close only on success, and let the parent own the toast (Campaigns.tsx's
+  // updateCampaignSettings already toasts the real outcome and re-throws on failure).
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await onSave(campaign.id, {
+        workHours,
+        maxQualifiedLeads: maxLeads,
+        crmApiEndpoint: crmEndpoint,
+        dailyCallCap,
+        timezone,
+        agentId: agentId || null,
+      });
+      setOpen(false);
+    } catch {
+      // Parent already surfaced the error; keep the dialog open so the user can retry.
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -163,8 +182,15 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
                   value={timezone}
                   onChange={(e) => setTimezone(e.target.value)}
                   placeholder="America/New_York"
-                  className="bg-secondary border-border text-sm"
+                  className={`bg-secondary text-sm ${timezoneValid ? "border-border" : "border-destructive focus-visible:ring-destructive"}`}
                 />
+                {/* §C.4 — catches E9's actual bug at save time instead of letting a typo save
+                    cleanly with a success toast and then silently stop the campaign forever. */}
+                {!timezoneValid && (
+                  <p className="text-[11px] text-destructive">
+                    Not a recognized timezone — calls to this campaign would silently stop going out.
+                  </p>
+                )}
               </div>
             </div>
             <p className="text-xs text-muted-foreground/70">
@@ -205,6 +231,14 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
                 </div>
               </div>
             )}
+            {/* §E.14 — this field IS enforced now (call-ingest §E.6 + dispatch-batch §E.10), so
+                the "actual limits the dispatcher enforces" line above the Work Hours group is
+                finally true of all three fields. Stated here too because Max Qualified Leads is a
+                separate section — a reader shouldn't have to infer it applies. */}
+            <p className="text-xs text-muted-foreground/70">
+              When the qualified count reaches this number, calling stops and the campaign is
+              marked Completed. Set 0 for unlimited.
+            </p>
           </div>
 
           {/* CRM API Endpoint */}
@@ -227,7 +261,9 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
             </div>
           </div>
 
-          <Button onClick={handleSave} disabled={!canEditSettings} className="w-full">Save Settings</Button>
+          <Button onClick={handleSave} disabled={!canEditSettings || isSaving || !timezoneValid} className="w-full">
+            {isSaving ? "Saving…" : "Save Settings"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

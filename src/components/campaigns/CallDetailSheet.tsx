@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Phone, Mail, Clock, Star, AlertTriangle, ChevronDown, ChevronRight, ShieldAlert, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Phone, Mail, Clock, Star, AlertTriangle, ChevronDown, ChevronRight, ShieldAlert, Trash2, ExternalLink } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { CallRecord } from "./types";
-import { DISPLAY_STATUS_LABEL, DISPLAY_STATUS_HELP } from "@/lib/callPipeline";
+import { DISPLAY_STATUS_LABEL, DISPLAY_STATUS_HELP, describeAttempts, formatRetryTime } from "@/lib/callPipeline";
+import { resolveTranscriptTurns } from "@/lib/transcript";
 import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 
 const OUTCOME_OPTIONS = ["Qualified", "Not Qualified", "Requested Follow-up", "Voicemail", "Unreachable"];
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -42,13 +44,69 @@ const CallDetailSheet = ({ record, onOpenChange, onOverride, onDelete, canDelete
   const [overrideOutcome, setOverrideOutcome] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // §D.2 — the only way to tell "no recording exists" apart from "a recording exists but won't
+  // play" (E11 — hasRecording can't do it; it's the same signal as recordingUrl itself).
+  const [recordingError, setRecordingError] = useState(false);
+  // §D.6 (2026-09-11 addendum) — the URL stored in the DB is Vapi's raw, private storage path,
+  // not something a browser can fetch directly (confirmed live: a real recording_url returned a
+  // 400 from Cloudflare R2). `get-recording-url` re-derives a fresh, short-lived, actually
+  // playable link on demand — fetched once per opened record, never cached past this sheet's
+  // lifetime, since Vapi's own docs say the signed URL expires quickly.
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [signedUrlLoading, setSignedUrlLoading] = useState(false);
+  const [signedUrlError, setSignedUrlError] = useState<string | null>(null);
 
   useEffect(() => {
     setTranscriptOpen(false);
     setOverrideOutcome(record?.outcome || "");
-  }, [record?.id, record?.outcome]);
+    setRecordingError(false);
+    setSignedUrl(null);
+    setSignedUrlError(null);
+
+    if (!record?.recordingUrl || !record.callRecordId) {
+      setSignedUrlLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSignedUrlLoading(true);
+    supabase.functions
+      .invoke("get-recording-url", { body: { call_record_id: record.callRecordId } })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error || !data?.url) {
+          setSignedUrlError(
+            data?.error === "no_recording"
+              ? "No recording was saved for this call."
+              : "Couldn't get a playable link for this recording.",
+          );
+          return;
+        }
+        setSignedUrl(data.url as string);
+      })
+      .catch(() => {
+        if (!cancelled) setSignedUrlError("Couldn't get a playable link for this recording.");
+      })
+      .finally(() => {
+        if (!cancelled) setSignedUrlLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [record?.id, record?.outcome, record?.recordingUrl, record?.callRecordId]);
+
+  // §E.1/§E.2 — D-3's "both": prefers the structured artifact.messages when call-ingest has
+  // captured it, falls back to parsing the flat `transcript` string otherwise. Computed before
+  // the early return below so hook order stays stable regardless of whether `record` is null.
+  const transcriptTurns = useMemo(
+    () => resolveTranscriptTurns(record?.transcriptMessages, record?.transcript ?? null),
+    [record?.transcriptMessages, record?.transcript],
+  );
 
   if (!record) return null;
+
+  // 2026-09-11 — null for a lead nobody has dialled yet, so the block below simply doesn't render.
+  const attempts = describeAttempts(record);
+  const retryAt = formatRetryTime(attempts?.retryAt);
 
   const canOverride = record.kind === "lead";
 
@@ -113,6 +171,31 @@ const CallDetailSheet = ({ record, onOpenChange, onOverride, onDelete, canDelete
             <Badge variant="outline" className="text-xs">{DISPLAY_STATUS_LABEL[record.status]}</Badge>
             {record.outcome && <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20">{record.outcome}</Badge>}
           </div>
+          {/* 2026-09-11 — the call history a user would otherwise have to open Vapi to learn.
+              Rendered for ANY attempted lead, not just the queued ones the table annotates:
+              here there is room, and "they hung up" is useful context even on a lead whose
+              badge already says the call completed. The raw endedReason is shown alongside the
+              friendly label deliberately — this pane is where debugging happens, and an
+              unmapped reason must not silently vanish. */}
+          {attempts && (
+            <div className="rounded-lg border border-border bg-secondary/40 p-3 space-y-1.5">
+              <p className="text-xs text-foreground font-medium">
+                Attempt {attempts.attemptsMade} of {attempts.attemptsAllowed}
+                {attempts.reasonLabel ? ` · ${attempts.reasonLabel}` : ""}
+              </p>
+              {attempts.rawReason && (
+                <p className="text-[10px] text-muted-foreground font-mono">{attempts.rawReason}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {attempts.attemptsExhausted
+                  ? "No attempts left — this lead won't be dialled again automatically."
+                  : retryAt
+                    ? `Next attempt scheduled for ${retryAt}.`
+                    : "Waiting to be picked up by the dispatcher."}
+              </p>
+            </div>
+          )}
+
           {/* C.17 — stalled gets its own explanatory line naming the dispatcher's sweep, so
               "why has this lead been dialing forever" has an answer right here. */}
           {record.status === "stalled" && (
@@ -158,14 +241,45 @@ const CallDetailSheet = ({ record, onOpenChange, onOverride, onDelete, canDelete
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Recording</p>
             {!canAccessRecording ? (
               <p className="text-xs text-muted-foreground">Needs the Call Center — Recording Access permission.</p>
-            ) : record.recordingUrl ? (
-              <audio controls preload="none" src={record.recordingUrl} className="w-full h-10" />
+            ) : !record.recordingUrl ? (
+              <p className="text-xs text-muted-foreground">No recording was saved for this call.</p>
+            ) : signedUrlLoading ? (
+              <p className="text-xs text-muted-foreground">Getting a playable link…</p>
+            ) : signedUrl ? (
+              <div className="space-y-1.5">
+                <audio
+                  controls
+                  preload="none"
+                  src={signedUrl}
+                  className="w-full h-10"
+                  // §D.2 — this is the ONLY way to distinguish "recording exists but won't play"
+                  // (an expired signed link, an unsupported codec) from having none at all — even
+                  // with a real, freshly-signed URL, playback can still fail for reasons this
+                  // component can't predict up front.
+                  onError={() => setRecordingError(true)}
+                />
+                {recordingError && (
+                  <p className="text-xs text-destructive flex items-center gap-1.5">
+                    <AlertTriangle className="h-3 w-3 shrink-0" /> The recording couldn't be loaded — open it directly.
+                  </p>
+                )}
+                <a
+                  href={signedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                >
+                  <ExternalLink className="h-3 w-3" /> Open in new tab
+                </a>
+              </div>
             ) : (
-              <p className="text-xs text-muted-foreground">No recording available for this call.</p>
+              <p className="text-xs text-destructive flex items-center gap-1.5">
+                <AlertTriangle className="h-3 w-3 shrink-0" /> {signedUrlError ?? "Couldn't get a playable link for this recording."}
+              </p>
             )}
           </div>
 
-          {record.transcript && (
+          {transcriptTurns.length > 0 && (
             <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen}>
               <CollapsibleTrigger asChild>
                 <Button variant="outline" size="sm" className="w-full justify-between border-border text-xs">
@@ -174,7 +288,34 @@ const CallDetailSheet = ({ record, onOpenChange, onOverride, onDelete, canDelete
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="pt-2">
-                <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-secondary/40 rounded-lg p-3 border border-border max-h-64 overflow-y-auto font-sans">{record.transcript}</pre>
+                {/* §E.5a — the escape hatch. Exactly one "unknown" turn means the parser found no
+                    speaker markers at all — render the original flat block verbatim, unchanged
+                    from today, rather than turning unparseable text into one giant mislabelled
+                    "bubble". */}
+                {transcriptTurns.length === 1 && transcriptTurns[0].speaker === "unknown" ? (
+                  <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-secondary/40 rounded-lg p-3 border border-border max-h-64 overflow-y-auto font-sans">{transcriptTurns[0].text}</pre>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto bg-secondary/40 rounded-lg p-3 border border-border">
+                    {transcriptTurns.map((turn, index) => (
+                      <div key={index} className={`flex ${turn.speaker === "lead" ? "justify-end" : "justify-start"}`}>
+                        <div
+                          className={`max-w-[85%] rounded-lg p-2.5 text-xs ${
+                            turn.speaker === "lead"
+                              ? "bg-primary/10 text-foreground"
+                              : turn.speaker === "agent"
+                                ? "bg-card border border-border text-foreground"
+                                : "bg-muted/50 text-muted-foreground italic"
+                          }`}
+                        >
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-0.5 opacity-70">
+                            {turn.speaker === "agent" ? record.agent || "Agent" : turn.speaker === "lead" ? record.name || "Lead" : "Unknown"}
+                          </p>
+                          <p className="whitespace-pre-wrap">{turn.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CollapsibleContent>
             </Collapsible>
           )}

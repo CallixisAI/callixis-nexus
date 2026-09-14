@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapCampaignWithStats, mergeLeadsWithCallRecords, buildCampaignsFromAccountData, UNASSIGNED_CAMPAIGN_ID } from "./useCampaigns";
+import { mapCampaignWithStats, mergeLeadsWithCallRecords, buildCampaignsFromAccountData, buildCampaignInsertPayload, UNASSIGNED_CAMPAIGN_ID } from "./useCampaigns";
 import type { Database } from "@/integrations/supabase/types";
 
 type CampaignRow = Database["public"]["Tables"]["campaigns"]["Row"];
@@ -66,6 +66,7 @@ const baseRecord = (overrides: Partial<CallRecordRow> = {}): CallRecordRow => ({
   ended_reason: null,
   lead_score: null,
   transcript: null,
+  transcript_messages: null,
   cost: null,
   disqual_reason: null,
   needs_review: false,
@@ -254,5 +255,24 @@ describe("buildCampaignsFromAccountData", () => {
 
     const real = result.find((c) => c.id === "campaign-1");
     expect(real?.leadsTotal).toBe(1);
+  });
+});
+
+// Call-quality plan §C.2t — the load-bearing fix (E8): before this, the insert had no `timezone`
+// key at all, so a created campaign always landed on the database default regardless of what the
+// dialog appeared to set.
+describe("buildCampaignInsertPayload", () => {
+  it("inserts the campaign's own detected timezone, not 'UTC'-by-omission", () => {
+    const payload = buildCampaignInsertPayload("user-1", {
+      name: "Manila Push",
+      industry: "Real Estate",
+      timezone: "Asia/Manila",
+    });
+    expect(payload.timezone).toBe("Asia/Manila");
+  });
+
+  it("falls back to UTC only when the caller genuinely supplied nothing", () => {
+    const payload = buildCampaignInsertPayload("user-1", { name: "No TZ set", industry: "Real Estate" });
+    expect(payload.timezone).toBe("UTC");
   });
 });

@@ -40,10 +40,16 @@ export type LeadCallStatus = "pending" | "dialing" | "completed";
 // Invariant, asserted by a test below: queued + dialing + stalled + called + excluded === total.
 export type LeadBucket = "queued" | "dialing" | "stalled" | "called" | "excluded";
 
-// The only three values campaigns.status is ever set to by this app (mapCampaignWithStats's own
-// fallback already treated anything else as "paused" before this file existed — normalizeCampaignStatus
-// keeps that behaviour rather than changing it).
-export type CampaignStatus = "active" | "paused" | "scheduled";
+// The values campaigns.status is ever set to by this app. `mapCampaignWithStats`'s own fallback
+// already treated anything unrecognized as "paused" before this file existed — normalizeCampaignStatus
+// keeps that behaviour.
+//
+// 🔴 Client-feedback plan §E.1 — "completed" is BACK, deliberately. counting-model Phase 3's C.9
+// removed it as "unreachable dead vocabulary, not a real state" — correct at the time, because
+// nothing wrote it. §E.6 (call-ingest, at the moment a qualified count reaches
+// campaigns.max_qualified_leads) now writes it, so it is a real, reachable state again. This is a
+// consequence of §E.6, not someone undoing C.9 by accident.
+export type CampaignStatus = "active" | "paused" | "scheduled" | "completed";
 
 // The one status vocabulary every page-level badge/label should render through. A real call
 // attempt's own outcome (completed/no-answer/failed) if there is one, else the lead's bucket
@@ -98,8 +104,20 @@ export function normalizeLeadCallStatus(value: string | null | undefined): LeadC
 }
 
 export function normalizeCampaignStatus(value: string | null | undefined): CampaignStatus {
-  if (value === "active" || value === "scheduled") return value;
+  // §E.2 — "completed" passes through now that §E.6 writes it, instead of falling into the
+  // "paused" default (which would make a finished campaign look manually paused).
+  if (value === "active" || value === "scheduled" || value === "completed") return value;
   return "paused";
+}
+
+// Client-feedback plan §E.V1 — the Max Qualified Leads cap predicate, pure and unit-tested the
+// same way this file's buckets are. `max_qualified_leads = 0` means unlimited (matches the UI
+// copy "0 = unlimited"), so a 0 cap is never "reached". Mirrored — NOT imported, these are Deno
+// functions — in supabase/functions/call-ingest/index.ts (§E.6) and
+// supabase/functions/dispatch-batch/index.ts (§E.10), each with the grep that finds this as the
+// source of truth, same cross-runtime convention as STUCK_CALL_MINUTES above.
+export function isQualifiedCapReached(qualifiedCount: number, maxQualifiedLeads: number): boolean {
+  return maxQualifiedLeads > 0 && qualifiedCount >= maxQualifiedLeads;
 }
 
 // NULL last_called_at while dialing reads as stalled too — a lead can't be genuinely "just
@@ -166,6 +184,133 @@ export function countLeads(leads: LeadBucketInput[], now: number = Date.now()): 
   return counts;
 }
 
+// ---------------------------------------------------------------------------------------------
+// What happened on the attempts so far
+// ---------------------------------------------------------------------------------------------
+
+// 2026-09-11 (James) — "the user will not know that the user is busy if they do not have access
+// to vapi right?". Correct, and it was a real hole: a lead that had been dialled and come back
+// `customer-busy` rendered as a bare "Queued", identical to one nobody had ever touched. Every
+// fact needed to say otherwise (retry_count, ended_reason, next_call_at) was already in the
+// query and simply never reached the screen.
+//
+// Vapi's raw endedReason values are engine vocabulary, not customer vocabulary. Only reasons we
+// have actually decided how to phrase are mapped; anything unknown returns null and the UI shows
+// nothing rather than leaking a string like "pipeline-error-openai-llm-failed" into a sales view.
+// The raw value is still surfaced verbatim in the detail sheet, where debugging is the point.
+export const ENDED_REASON_LABEL: Record<string, string> = {
+  // Nobody picked up. NO_ANSWER_REASONS in call-ingest/index.ts treats these three as one class
+  // (a retry is scheduled); they are phrased apart here because the difference matters to a
+  // human deciding whether to try this person again.
+  "customer-busy": "Line busy",
+  "customer-did-not-answer": "No answer",
+  "no-answer": "No answer",
+  // Reached a person.
+  "customer-ended-call": "They hung up",
+  "assistant-ended-call": "Call completed",
+  "assistant-forwarded-call": "Transferred",
+  "customer-ended-call-after-message": "They hung up",
+  // Reached a person, but the audio never worked. Worth phrasing distinctly: this is the
+  // signature of the 2026-09-11 call-quality problem, not of an uninterested prospect.
+  "silence-timed-out": "No response heard",
+  "exceeded-max-duration": "Reached the time limit",
+  // Never reached the network.
+  "twilio-failed-to-connect-call": "Could not connect",
+  "voicemail": "Voicemail",
+};
+
+export function endedReasonLabel(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  return ENDED_REASON_LABEL[reason] ?? null;
+}
+
+export interface AttemptInfo {
+  attemptsMade: number;
+  attemptsAllowed: number;
+  reasonLabel: string | null; // friendly, null when the reason is unmapped or absent
+  rawReason: string | null; // always the untouched value, for the detail sheet
+  retryAt: string | null; // ISO, ONLY when a retry is genuinely still in the future
+  attemptsExhausted: boolean;
+}
+
+export interface AttemptInfoInput {
+  retryCount?: number | null;
+  endedReason?: string | null;
+  nextCallAt?: string | null;
+}
+
+// Returns null when this lead has never been dialled — the caller renders nothing, which is the
+// correct and honest display for a genuinely untouched lead.
+//
+// `retryAt` is deliberately null for a next_call_at in the PAST: that retry is due now and the
+// dispatcher is about to take it, so promising the user a future time would be wrong. Same
+// next_call_at-is-not-the-whole-story care as isLeadPoolExhausted above.
+export function describeAttempts(input: AttemptInfoInput, now: number = Date.now()): AttemptInfo | null {
+  const attemptsMade = input.retryCount ?? 0;
+  if (attemptsMade <= 0) return null;
+
+  const parsedRetry = input.nextCallAt ? new Date(input.nextCallAt).getTime() : NaN;
+  const retryIsFuture = Number.isFinite(parsedRetry) && parsedRetry > now;
+
+  return {
+    attemptsMade,
+    attemptsAllowed: MAX_RETRY_COUNT,
+    reasonLabel: endedReasonLabel(input.endedReason),
+    rawReason: input.endedReason ?? null,
+    retryAt: retryIsFuture ? (input.nextCallAt as string) : null,
+    attemptsExhausted: attemptsMade >= MAX_RETRY_COUNT,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Why a campaign finished
+// ---------------------------------------------------------------------------------------------
+
+// 2026-09-11 (James) — "when all leads are completed or the number of qualified leads are done,
+// automatically pause it, but label it as completed". The cap half already existed (§E.6); this
+// is the other half, plus the shared vocabulary for saying WHICH of the two happened.
+//
+// The reason is DERIVED, never stored — no `completion_reason` column exists and none is needed,
+// because both inputs (the qualified count, the lead buckets) are already on screen. That keeps
+// this a pure, testable function and avoids a migration for a label.
+export type CampaignCompletionReason = "cap-reached" | "leads-exhausted";
+
+export const COMPLETION_REASON_LABEL: Record<CampaignCompletionReason, string> = {
+  "cap-reached": "Qualified-leads target reached",
+  "leads-exhausted": "All leads called",
+};
+
+// Nothing is left that could EVER be dialed again on this campaign.
+//
+// 🔑 The load-bearing subtlety: this deliberately ignores `next_call_at`. A lead whose retry is
+// scheduled for tomorrow, or one waiting for the campaign's work hours to come round, is still
+// `queued` (see bucketLead — it never looks at next_call_at), so this stays FALSE until that
+// retry is actually spent. "No leads due right now" and "this campaign is finished" are very
+// different questions, and confusing them would auto-complete every campaign overnight.
+//
+// `stalled` counts as not-exhausted on purpose: a stalled lead is one the sweeper
+// (callixis-sweep-stuck-leads, every 5 min) is about to reset to `pending` and dial again.
+// total > 0 guards the empty campaign — an untouched campaign with no leads is not "finished".
+export function isLeadPoolExhausted(counts: LeadCounts): boolean {
+  return counts.total > 0 && counts.queued === 0 && counts.dialing === 0 && counts.stalled === 0;
+}
+
+// Which of the two ended it, for a campaign already sitting at "completed". Returns null when
+// neither condition explains it (a campaign completed by some other path, or data that has since
+// changed — e.g. more leads were uploaded after it finished).
+//
+// The cap wins when both are true: it is the more informative answer, because it means the
+// campaign stopped EARLY and there may still be leads worth calling if the cap is raised.
+export function campaignCompletionReason(
+  qualifiedCount: number,
+  maxQualifiedLeads: number,
+  counts: LeadCounts,
+): CampaignCompletionReason | null {
+  if (isQualifiedCapReached(qualifiedCount, maxQualifiedLeads)) return "cap-reached";
+  if (isLeadPoolExhausted(counts)) return "leads-exhausted";
+  return null;
+}
+
 export interface CallCounts {
   total: number; // every call_records row, attempts + unattributed
   attempted: number; // real attempts only (completed/no-answer/failed)
@@ -209,6 +354,35 @@ export function formatPercent(value: number): string {
   return `${value}%`;
 }
 
+// A scheduled retry is almost always within a day, so the time alone is what a user needs; a
+// weekday prefix is added once it isn't today, so "09:00" can never be mistaken for this morning.
+// Rendered in the viewer's own locale/zone deliberately — unlike the CAMPAIGN's timezone (which
+// governs when the engine dials), this is "when will I see something happen", a local question.
+export function formatRetryTime(iso: string | null | undefined, now: number = Date.now()): string | null {
+  if (!iso) return null;
+  const when = new Date(iso);
+  const ms = when.getTime();
+  if (!Number.isFinite(ms)) return null;
+  const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const sameDay = when.toDateString() === new Date(now).toDateString();
+  return sameDay ? time : `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+}
+
+// The one-line summary shown under a lead's status badge. Returns null when there is nothing
+// worth saying, so callers can render it unconditionally.
+export function attemptSummaryLine(info: AttemptInfo | null, now: number = Date.now()): string | null {
+  if (!info) return null;
+  const parts = [`Attempt ${info.attemptsMade} of ${info.attemptsAllowed}`];
+  if (info.reasonLabel) parts.push(info.reasonLabel);
+  if (info.attemptsExhausted) {
+    parts.push("no attempts left");
+  } else {
+    const retry = formatRetryTime(info.retryAt, now);
+    parts.push(retry ? `retrying ${retry}` : "retrying shortly");
+  }
+  return parts.join(" · ");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Label maps — the copy lives here once; icons/colours stay in components (A.9).
 // ---------------------------------------------------------------------------------------------
@@ -250,6 +424,9 @@ export const CAMPAIGN_STATUS_LABEL: Record<CampaignStatus, string> = {
   active: "Active",
   paused: "Paused",
   scheduled: "Scheduled",
+  // §E.3 — reachable again (see the CampaignStatus comment): §E.6 sets a campaign to this once
+  // its qualified count hits max_qualified_leads.
+  completed: "Completed",
 };
 
 // ---------------------------------------------------------------------------------------------

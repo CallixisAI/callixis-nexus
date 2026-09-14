@@ -232,9 +232,9 @@ const Finance = () => {
           id: `${campaign.id}-leads`,
           type: "lead",
           amount: campaign.qualifiedLeadsSent * 75,
-          // C.9 — Campaign["status"] never reaches "Completed" (campaigns.status is only ever
-          // active/paused/scheduled); this always evaluated to "pending" in practice, since no
-          // payment provider is wired up yet (see the disclaimer card below).
+          // Always "pending" here regardless of campaign status — no payment provider is wired up
+          // yet (see the disclaimer card below). (client-feedback §E re-added a "Completed"
+          // campaign status, but this Transaction.status is a billing state, unrelated.)
           status: "pending",
           description: `${campaign.qualifiedLeadsSent} qualified leads from ${campaign.name}`,
           date: campaign.records[0]?.callDate || "",
