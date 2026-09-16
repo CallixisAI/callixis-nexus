@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 import { generateToken, generateCode, formatCodeForDisplay, sha256Hex } from "../_shared/invite-crypto.ts"
 import { writeAuditLog, getClientIp, type AuditAction } from "../_shared/audit-log.ts"
 
@@ -186,9 +186,10 @@ async function handleSetRole(
     const superRoleKeys = (allRoles ?? []).filter((r) => r.is_super).map((r) => r.key)
     const { count, error: countError } = await supabaseClient
       .from('user_roles')
-      .select('user_id', { count: 'exact', head: true })
+      .select('user_id', { count: 'exact' })
       .in('role', superRoleKeys)
       .neq('user_id', targetUserId)
+      .limit(1) // count comes from the Content-Range header, not the rows
 
     if (countError) throw countError
     if (!count) {

@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 
 // Phase 4 (call-engine plan) — the door the n8n dispatcher calls instead of holding a Supabase
 // service-role key itself (same reasoning as call-ingest — see CLAUDE.md's "Secrets never go in
@@ -129,9 +129,10 @@ serve(async (req) => {
       // previous dispatch's response, which could be stale or wrong if a run partially failed.
       const { count: occupiedSlots, error: occupiedError } = await supabase
         .from('leads')
-        .select('id', { count: 'exact', head: true })
+        .select('id', { count: 'exact' })
         .eq('call_status', 'dialing')
-      if (occupiedError) return jsonError(500, 'failed to count occupied slots', occupiedError.message)
+        .limit(1) // count comes from the Content-Range header, not the rows
+      if (occupiedError) return jsonError(500, 'failed to count occupied slots', occupiedError)
 
       const availableSlots = Math.max(0, Math.min(concurrencyLimit, maxBatch) - (occupiedSlots ?? 0))
       if (availableSlots === 0) {
@@ -157,7 +158,10 @@ serve(async (req) => {
         // and found the assistant never referenced the lead's email or phone number, on top of
         // the agent-name gap §A already targets. Plumbed through the same three-layer '' defence
         // as every other field here (see §A.5's comment on the response below).
-        .select('id, user_id, campaign_id, first_name, phone, email, external_ref, timezone, next_call_at, campaigns!inner(status, work_hours, timezone, daily_call_cap, max_qualified_leads, industry, agent_id)')
+        // lead-enrichment plan §D.1 — the six spoken enrichment fields (D-1) added to the select,
+        // same three-layer '' defence as every field above (this function, n8n's Validate E164 &
+        // Build Payload, and Place Call (Vapi)'s own `|| ""`).
+        .select('id, user_id, campaign_id, first_name, phone, email, external_ref, timezone, next_call_at, address, city, zip, home_type, home_built, last_service, campaigns!inner(status, work_hours, timezone, daily_call_cap, max_qualified_leads, industry, agent_id)')
         .eq('call_status', 'pending')
         .eq('do_not_call', false)
         .lt('retry_count', MAX_RETRY_COUNT)
@@ -268,10 +272,11 @@ serve(async (req) => {
           } else {
             const { count: qualifiedSoFar, error: qualifiedError } = await supabase
               .from('call_records')
-              .select('id', { count: 'exact', head: true })
+              .select('id', { count: 'exact' })
               .eq('campaign_id', campaignId)
               .eq('is_qualified', true)
-            if (qualifiedError) return jsonError(500, 'failed to compute qualified cap', qualifiedError.message)
+              .limit(1) // count comes from the Content-Range header, not the rows
+            if (qualifiedError) return jsonError(500, 'failed to compute qualified cap', qualifiedError)
             qualifiedCapReached.set(campaignId, (qualifiedSoFar ?? 0) >= qualCap)
           }
         }
@@ -283,10 +288,11 @@ serve(async (req) => {
         if (!capRemaining.has(lead.campaign_id as string)) {
           const { count: dialedToday, error: dialedError } = await supabase
             .from('leads')
-            .select('id', { count: 'exact', head: true })
+            .select('id', { count: 'exact' })
             .eq('campaign_id', lead.campaign_id as string)
             .gte('last_called_at', startOfUtcDay)
-          if (dialedError) return jsonError(500, 'failed to compute daily cap', dialedError.message)
+            .limit(1) // count comes from the Content-Range header, not the rows
+          if (dialedError) return jsonError(500, 'failed to compute daily cap', dialedError)
           const cap = campaign.daily_call_cap ?? DEFAULT_DAILY_CAP
           capRemaining.set(lead.campaign_id as string, Math.max(0, cap - (dialedToday ?? 0)))
         }
@@ -385,6 +391,16 @@ serve(async (req) => {
             welcome_message: agent?.welcome_message ?? '',
             company_name: companyNameByUserId.get(l.user_id as string) ?? '',
             voice_id: agent?.voice ?? '',
+            // lead-enrichment plan §D.1/D.2 — the six spoken enrichment fields (D-1). home_built
+            // is the only non-text one (INTEGER) — stringified here so it reaches n8n/Vapi as a
+            // plain string like every other variableValue, never as a bare number JSON would
+            // otherwise serialize it as.
+            address: (l as { address?: string | null }).address ?? '',
+            city: (l as { city?: string | null }).city ?? '',
+            zip: (l as { zip?: string | null }).zip ?? '',
+            home_type: (l as { home_type?: string | null }).home_type ?? '',
+            home_built: (l as { home_built?: number | null }).home_built != null ? String((l as { home_built?: number | null }).home_built) : '',
+            last_service: (l as { last_service?: string | null }).last_service ?? '',
           }
         }),
         occupied_slots: occupiedSlots ?? 0,

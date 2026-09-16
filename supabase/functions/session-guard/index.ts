@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 
 // Phase 5 (admin-module-plan) — docs/admin-module-plan/PHASE-5-ip-whitelisting.md §D.
 // The post-login edge gate. Login.tsx calls this immediately after a successful

@@ -529,6 +529,22 @@ export type Database = {
           do_not_call: boolean
           timezone: string | null
           active_call_id: string | null
+          // lead-enrichment plan §B — spoken on the call (D-1).
+          address: string | null
+          city: string | null
+          zip: string | null
+          home_type: string | null
+          home_built: number | null
+          last_service: string | null
+          // §B — stored for filtering, never spoken (D-2/D-4).
+          gender: string | null
+          stories: number | null
+          bedrooms: number | null
+          bathrooms: number | null
+          phone_type: string | null
+          phone_region: string | null
+          phone_carrier: string | null
+          lead_posted_at: string | null
           created_at: string
           updated_at: string
         }
@@ -552,6 +568,20 @@ export type Database = {
           do_not_call?: boolean
           timezone?: string | null
           active_call_id?: string | null
+          address?: string | null
+          city?: string | null
+          zip?: string | null
+          home_type?: string | null
+          home_built?: number | null
+          last_service?: string | null
+          gender?: string | null
+          stories?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          phone_type?: string | null
+          phone_region?: string | null
+          phone_carrier?: string | null
+          lead_posted_at?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -575,6 +605,20 @@ export type Database = {
           do_not_call?: boolean
           timezone?: string | null
           active_call_id?: string | null
+          address?: string | null
+          city?: string | null
+          zip?: string | null
+          home_type?: string | null
+          home_built?: number | null
+          last_service?: string | null
+          gender?: string | null
+          stories?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          phone_type?: string | null
+          phone_region?: string | null
+          phone_carrier?: string | null
+          lead_posted_at?: string | null
           created_at?: string
           updated_at?: string
         }

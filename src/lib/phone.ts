@@ -6,7 +6,24 @@
 // spans both a Deno/Node script and a browser bundle. If you change the normalization rule in
 // one place, change it in the other, or the CSV importer and the in-app uploader will silently
 // diverge on which numbers they accept.
-const COUNTRY_CALLING_CODE: Record<string, string> = { Canada: "1", Pakistan: "92" };
+//
+// lead-enrichment plan §A.1 — added United States/USA/US -> "1". Before this, a real 2000+ row
+// US lead list was rejected outright: every "Country" cell said some spelling of "United States",
+// which had no entry here at all.
+const COUNTRY_CALLING_CODE: Record<string, string> = {
+  Canada: "1",
+  Pakistan: "92",
+  "United States": "1",
+  USA: "1",
+  US: "1",
+};
+
+// lead-enrichment plan §A.2 — a bare 10-digit number with NO country column at all (not "an
+// unrecognized one" — that still fails below, on purpose) is assumed to be a US number. This is a
+// deliberate business call, not a silent guess: this app's upload flows exist to serve US client
+// lead lists, and rejecting the whole file to guard against a non-US bare-10-digit number that
+// hasn't happened yet costs real leads for no real protection.
+const ASSUME_US_CALLING_CODE_FOR_BARE_10_DIGIT = "1";
 
 export interface PhoneNormalizeResult {
   ok: boolean;
@@ -33,7 +50,15 @@ export function normalizePhone(rawPhone: string | null | undefined, country?: st
 
   const countryInput = country?.trim() ?? "";
   const asCallingCode = countryInput.replace(/^\+/, "");
-  const code = COUNTRY_CALLING_CODE[countryInput] || (/^\d{1,3}$/.test(asCallingCode) ? asCallingCode : undefined);
+  let code = COUNTRY_CALLING_CODE[countryInput] || (/^\d{1,3}$/.test(asCallingCode) ? asCallingCode : undefined);
+
+  // §A.2 — only when the country column is genuinely blank, never when it names an unrecognized
+  // country (e.g. "France" still fails below, deliberately — a wrong explicit country is a data
+  // problem worth flagging, not one to silently override).
+  if (!code && !countryInput && digits.length === 10) {
+    code = ASSUME_US_CALLING_CODE_FOR_BARE_10_DIGIT;
+  }
+
   if (!code) {
     return { ok: false, reason: `no known calling code for country "${country || "(blank)"}"` };
   }

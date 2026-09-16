@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 
 // Call-quality plan §D — real finding, 2026-09-11, found while diagnosing James's live test
 // call rather than predicted in the plan doc. §D's original build (the `onError` handler on

@@ -19,15 +19,29 @@ describe("normalizePhone", () => {
     expect(normalizePhone("5550100123", "Canada")).toEqual({ ok: true, phone: "+15550100123" });
   });
 
-  it("rejects a bare number with no recognized country", () => {
+  // lead-enrichment plan §A.2 — changed 2026-09-15. A bare 10-digit number with NO country column
+  // at all is now assumed US, not rejected — see phone.ts's own comment on why.
+  it("assumes US for a bare 10-digit number with no country column at all", () => {
+    expect(normalizePhone("5550100123", null)).toEqual({ ok: true, phone: "+15550100123" });
+    expect(normalizePhone("5550100123", undefined)).toEqual({ ok: true, phone: "+15550100123" });
+    expect(normalizePhone("5550100123", "")).toEqual({ ok: true, phone: "+15550100123" });
+  });
+
+  it("does NOT assume US for a number that isn't exactly 10 digits with no country", () => {
+    expect(normalizePhone("555010012", null).ok).toBe(false); // 9 digits
+    expect(normalizePhone("55501001234", null).ok).toBe(false); // 11 digits
+  });
+
+  it("still rejects an unrecognized EXPLICIT country rather than silently assuming US", () => {
     const result = normalizePhone("5550100123", "France");
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/no known calling code/);
   });
 
-  it("rejects a bare number with no country at all", () => {
-    const result = normalizePhone("5550100123", null);
-    expect(result.ok).toBe(false);
+  it("accepts the United States spelling variants", () => {
+    expect(normalizePhone("5550100123", "United States")).toEqual({ ok: true, phone: "+15550100123" });
+    expect(normalizePhone("5550100123", "USA")).toEqual({ ok: true, phone: "+15550100123" });
+    expect(normalizePhone("5550100123", "US")).toEqual({ ok: true, phone: "+15550100123" });
   });
 
   it("rejects an empty or whitespace-only phone", () => {

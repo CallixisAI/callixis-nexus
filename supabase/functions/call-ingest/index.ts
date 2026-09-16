@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 
 // Phase 3 (call-engine plan) — the one door n8n writes finished-call outcomes through.
 // n8n never gets a Supabase service-role key; it authenticates with a shared secret instead
@@ -102,9 +102,10 @@ async function enforceCampaignCompletion(
     if (wasQualified && cap > 0) {
       const { count, error: countError } = await supabase
         .from('call_records')
-        .select('id', { count: 'exact', head: true })
+        .select('id', { count: 'exact' })
         .eq('campaign_id', campaignId)
         .eq('is_qualified', true)
+        .limit(1) // count comes from the Content-Range header, not the rows
       if (countError) return
 
       if ((count ?? 0) >= cap) {
@@ -132,9 +133,10 @@ async function enforceCampaignCompletion(
     // (callixis-sweep-stuck-leads) is about to reset to 'pending' and dial again.
     const { count: dialingCount, error: dialingError } = await supabase
       .from('leads')
-      .select('id', { count: 'exact', head: true })
+      .select('id', { count: 'exact' })
       .eq('campaign_id', campaignId)
       .eq('call_status', 'dialing')
+      .limit(1) // count comes from the Content-Range header, not the rows
     if (dialingError) return
     if ((dialingCount ?? 0) > 0) return
 
@@ -142,11 +144,12 @@ async function enforceCampaignCompletion(
     // on, minus their next_call_at / work-hours clauses (see the note above).
     const { count: dialableCount, error: dialableError } = await supabase
       .from('leads')
-      .select('id', { count: 'exact', head: true })
+      .select('id', { count: 'exact' })
       .eq('campaign_id', campaignId)
       .eq('call_status', 'pending')
       .eq('do_not_call', false)
       .lt('retry_count', MAX_RETRY_COUNT)
+      .limit(1) // count comes from the Content-Range header, not the rows
     if (dialableError) return
     if ((dialableCount ?? 0) > 0) return
 
@@ -154,8 +157,9 @@ async function enforceCampaignCompletion(
     // because payloadCampaignId can be the legacy fallback id while the lead belongs elsewhere.
     const { count: totalCount, error: totalError } = await supabase
       .from('leads')
-      .select('id', { count: 'exact', head: true })
+      .select('id', { count: 'exact' })
       .eq('campaign_id', campaignId)
+      .limit(1) // count comes from the Content-Range header, not the rows
     if (totalError) return
     if ((totalCount ?? 0) === 0) return
 

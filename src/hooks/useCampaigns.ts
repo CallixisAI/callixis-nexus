@@ -400,6 +400,27 @@ export function useCampaigns() {
           country: row.country,
           source: row.source,
           call_status: "pending",
+          // lead-enrichment plan §C.4 — the thirteen enrichment fields, already parsed and
+          // validated by leadCsv.ts's buildLeadPreview. `row.timezone` (from
+          // src/lib/leadTimezone.ts's timezoneForZip, D-4) populates leads.timezone here — the
+          // first time this column has ever actually been set on upload.
+          address: row.address,
+          city: row.city,
+          zip: row.zip,
+          home_type: row.home_type,
+          home_built: row.home_built,
+          last_service: row.last_service,
+          gender: row.gender,
+          stories: row.stories,
+          bedrooms: row.bedrooms,
+          bathrooms: row.bathrooms,
+          phone_type: row.phone_type,
+          phone_region: row.phone_region,
+          phone_carrier: row.phone_carrier,
+          lead_posted_at: row.lead_posted_at,
+          // null when the zip didn't resolve (leadTimezone.ts never guesses) — same as omitting
+          // it, since the column is nullable with no default.
+          timezone: row.timezone,
         }));
 
         const { error, count } = await supabase

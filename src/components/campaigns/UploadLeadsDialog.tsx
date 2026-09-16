@@ -33,6 +33,10 @@ interface UploadLeadsDialogProps {
 
 type Step = "select" | "preview" | "uploading";
 
+// lead-enrichment plan §A.5 — matches useCampaigns.ts's addLeadsMutation CHUNK_SIZE, so the
+// duplicate pre-check and the real insert never disagree about how large a safe batch is.
+const DUPLICATE_CHECK_CHUNK_SIZE = 500;
+
 const downloadExampleCSV = () => {
   const csvContent = "Country Code,Name,Surname,Email,Phone,Source,Notes\n+1,John,Smith,john@example.com,555-0199,Website,Interested in mortgage\n+44,Jane,Doe,jane@example.co.uk,7700 900123,Google Ads,Follow up next week";
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -111,19 +115,30 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, l
         // §A.5 — the (user_id, phone) unique index is what actually rejects duplicates on
         // insert; this is only to show the count ahead of time, per §A.4's "show a preview
         // before committing" rather than surprising the user with a smaller count after the fact.
+        //
+        // lead-enrichment plan §A.5 (E10/E11) — this used to send every phone number in ONE
+        // `.in()` URL. At 2000 numbers that's ~26KB of query string, very likely rejected for
+        // length by the time it reaches Postgres — and it was also the last surviving `head: true`
+        // count in the repo (the 2026-09-14 edge-function sweep fixed all 7 others), so a
+        // PostgREST error here had no body and the caught error's message was blank. Both fixed
+        // together: batch at the same 500-row CHUNK_SIZE the actual insert uses, and read the
+        // count from a body-returning request instead of a HEAD one.
         try {
           const phones = built.validRows.map((row) => row.phone);
-          if (phones.length > 0) {
+          let existingCount = 0;
+          for (let i = 0; i < phones.length; i += DUPLICATE_CHECK_CHUNK_SIZE) {
+            const chunk = phones.slice(i, i + DUPLICATE_CHECK_CHUNK_SIZE);
+            if (chunk.length === 0) continue;
             const { count, error } = await supabase
               .from("leads")
-              .select("id", { count: "exact", head: true })
+              .select("id", { count: "exact" })
               .eq("user_id", user.id)
-              .in("phone", phones);
+              .in("phone", chunk)
+              .limit(1); // count comes from the Content-Range header, not the rows
             if (error) throw error;
-            setExistingDuplicateCount(count ?? 0);
-          } else {
-            setExistingDuplicateCount(0);
+            existingCount += count ?? 0;
           }
+          setExistingDuplicateCount(existingCount);
         } catch (err) {
           toast.error(`Could not check for existing duplicates: ${errorMessage(err)}`);
         } finally {
@@ -265,6 +280,31 @@ const UploadLeadsDialog = ({ open, onOpenChange, campaigns, defaultCampaignId, l
               <p className="text-xs text-muted-foreground">
                 {existingDuplicateCount} of the valid rows already exist for {selectedCampaign ? "this account" : "you"} and will be skipped, not duplicated.
               </p>
+            )}
+
+            {/* lead-enrichment plan §C.5 — show the enrichment landed before committing, so a bad
+                header match (a zip that parsed but landed in the wrong column, say) is caught here
+                rather than discovered mid-campaign. Same 20-row cap as the invalid/duplicate list
+                above (E9) — a 2000-row file must not hang this dialog. */}
+            {preview.validRows.some((r) => r.address || r.zip || r.home_type || r.home_built || r.last_service) && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground font-medium">Enrichment preview (first 20):</p>
+                <div className="max-h-40 overflow-y-auto border border-border rounded-lg divide-y divide-border">
+                  {preview.validRows.slice(0, 20).map((row, i) => (
+                    <div key={i} className="p-2 text-xs">
+                      <span className="text-foreground font-medium">{row.first_name || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {row.address ? ` — ${row.address}` : ""}
+                        {row.city ? `, ${row.city}` : ""}
+                        {row.zip ? ` ${row.zip}` : ""}
+                        {row.home_type ? ` · ${row.home_type}` : ""}
+                        {row.home_built ? ` · built ${row.home_built}` : ""}
+                        {row.last_service ? ` · last service: ${row.last_service}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
             <div className="flex gap-2">

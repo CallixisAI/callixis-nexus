@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 
 // Event-driven Phase 4 — docs/event-driven-plan/PHASE-4-real-event-triggers.md §A.
 // The one shared door-knocker: every real event (campaign started, leads uploaded, a call

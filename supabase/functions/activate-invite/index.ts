@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.115.0"
 import { normalizeCode, sha256Hex, timingSafeEqualHex } from "../_shared/invite-crypto.ts"
 
 // Phase 4 (docs/admin-module-plan/PHASE-4-invite-and-activation.md §D/§F) — the one door an
