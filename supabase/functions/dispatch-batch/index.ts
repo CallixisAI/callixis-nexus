@@ -51,6 +51,32 @@ const DEFAULT_DAILY_CAP = 100
 
 const E164 = /^\+[1-9]\d{6,14}$/
 
+// Agent-voice plan §C (D-3) — mirrors (does NOT import — Deno/Vite boundary, same reasoning as
+// src/lib/phone.ts's normalizer and src/lib/leadTimezone.ts's ZIP table) the voiceId set from
+// src/lib/voices.ts's VOICE_REGISTRY. Source of truth: src/lib/voices.ts. Keep in sync by hand.
+// A stale or hand-edited ai_agents.voice that isn't a known-good ElevenLabs voice ID is blanked
+// below rather than sent to Vapi raw: Trap 1 (docs/agent-voice-plan/README.md) means a malformed
+// voiceId fails the WHOLE call, not just the voice, so degrading to "no override, assistant's own
+// voice" is the safe failure mode - the same "gate here, in dispatch-batch" precedent has_due_leads()
+// already established for eligibility.
+const KNOWN_VOICE_IDS = new Set([
+  'EXAVITQu4vr4xnSDxMaL', // Sarah
+  'JBFqnCBsd6RMkjVDRZzb', // James (ElevenLabs calls this voice "George")
+  '21m00Tcm4TlvDq8ikWAM', // Rachel
+  '9BWtsMINqrJLrRacOk9x', // Aria
+  'FGY2WhTYpPnrIDTdsKH5', // Laura
+  'cgSgspJ2msm6clMCkdW9', // Jessica
+  'Xb7hH8MSUJpSbSDYk0k2', // Alice
+  'pFZP5JQG7iQjIQuC4Bku', // Lily
+  'XB0fDUnXU5powFXDhCwa', // Charlotte
+  'CwhRBWXzGAHq8TQ4Fs17', // Roger
+  'nPczCjzI2devNBz1zQrb', // Brian
+  'cjVigY5qzO86Huf0OWal', // Eric
+  'onwK4e9ZLuTAKqWW03F9', // Daniel
+  'IKne3meq5aSn9XLyUdCD', // Charlie
+  'N2lVS1w4EtoT3dr4eOWO', // Callum
+])
+
 type WorkHours = { days?: string[]; startTime?: string; endTime?: string }
 
 // Whether `now` falls inside `workHours`, evaluated in `tz`. Fails closed (returns false) on any
@@ -390,7 +416,9 @@ serve(async (req) => {
             extra_instructions: agent?.script ?? '',
             welcome_message: agent?.welcome_message ?? '',
             company_name: companyNameByUserId.get(l.user_id as string) ?? '',
-            voice_id: agent?.voice ?? '',
+            // Agent-voice plan §C (D-3) — an unrecognised voice (stale row, hand edit) degrades
+            // to '' (no override) rather than being sent to Vapi raw. See KNOWN_VOICE_IDS above.
+            voice_id: agent?.voice && KNOWN_VOICE_IDS.has(agent.voice) ? agent.voice : '',
             // lead-enrichment plan §D.1/D.2 — the six spoken enrichment fields (D-1). home_built
             // is the only non-text one (INTEGER) — stringified here so it reaches n8n/Vapi as a
             // plain string like every other variableValue, never as a bare number JSON would
