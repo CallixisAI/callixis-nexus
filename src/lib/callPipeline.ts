@@ -354,6 +354,16 @@ export function formatPercent(value: number): string {
   return `${value}%`;
 }
 
+// Dashboard tiles plan §B.1 — moved verbatim from Dashboard.tsx:85-91 (D.2's human-friendly
+// "Xm Ys" / "Xs" formatter), so src/components/dashboard/tiles.tsx can reach it without
+// importing from the page component itself.
+export function formatDurationLabel(totalSeconds: number | null): string {
+  if (totalSeconds === null) return "—";
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 // A scheduled retry is almost always within a day, so the time alone is what a user needs; a
 // weekday prefix is added once it isn't today, so "09:00" can never be mistaken for this morning.
 // Rendered in the viewer's own locale/zone deliberately — unlike the CAMPAIGN's timezone (which

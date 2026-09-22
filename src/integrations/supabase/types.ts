@@ -276,6 +276,37 @@ export type Database = {
         }
         Relationships: []
       }
+      // Dashboard tiles plan §E.7 (supabase/migrations/20260917000000_user_page_layouts.sql) —
+      // per-user, per-page tile layout. `layout: Json`, not `Json | null`: the column is NOT
+      // NULL with a default, never absent once a row exists. ⛔ Migration is file-side only as
+      // of this change — see CLAUDE.md before assuming this table exists live.
+      user_page_layouts: {
+        Row: {
+          id: string
+          user_id: string
+          page_key: string
+          layout: Json
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          page_key: string
+          layout?: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          page_key?: string
+          layout?: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ai_agents: {
         Row: {
           id: string

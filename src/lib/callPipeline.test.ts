@@ -12,6 +12,7 @@ import {
   connectRate,
   qualifiedRate,
   formatPercent,
+  formatDurationLabel,
   engineStatus,
   isQualifiedCapReached,
   describeAttempts,
@@ -245,6 +246,22 @@ describe("formatPercent", () => {
   it("appends a percent sign to a plain number", () => {
     expect(formatPercent(0)).toBe("0%");
     expect(formatPercent(67)).toBe("67%");
+  });
+});
+
+// Dashboard tiles plan §B.2 — moved from Dashboard.tsx, same 4 cases the plan doc names.
+describe("formatDurationLabel", () => {
+  it("renders null as an em dash", () => {
+    expect(formatDurationLabel(null)).toBe("—");
+  });
+  it("renders under a minute as plain seconds", () => {
+    expect(formatDurationLabel(45)).toBe("45s");
+  });
+  it("renders over a minute as minutes and seconds", () => {
+    expect(formatDurationLabel(90)).toBe("1m 30s");
+  });
+  it("renders an exact hour as 60m 0s, not 1h", () => {
+    expect(formatDurationLabel(3600)).toBe("60m 0s");
   });
 });
 
