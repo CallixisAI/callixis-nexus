@@ -276,6 +276,40 @@ export type Database = {
         }
         Relationships: []
       }
+      // Plugins plan §E.3 (supabase/migrations/20260922000000_plugin_secrets.sql) — metadata
+      // only ("is a secret set, and when"); the value itself lives in Vault, never here. ⛔
+      // Migration is file-side only as of this change — see CLAUDE.md before assuming this
+      // table exists live.
+      user_plugin_secrets: {
+        Row: {
+          id: string
+          user_id: string
+          plugin_id: string
+          field_key: string
+          vault_secret_id: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          plugin_id: string
+          field_key: string
+          vault_secret_id: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          plugin_id?: string
+          field_key?: string
+          vault_secret_id?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       // Dashboard tiles plan §E.7 (supabase/migrations/20260917000000_user_page_layouts.sql) —
       // per-user, per-page tile layout. `layout: Json`, not `Json | null`: the column is NOT
       // NULL with a default, never absent once a row exists. ⛔ Migration is file-side only as
