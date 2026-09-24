@@ -170,11 +170,18 @@ const CampaignSettingsDialog = ({ campaign, onSave, agents }: CampaignSettingsDi
                 <Label className="text-xs text-muted-foreground">Daily Call Cap</Label>
                 <Input
                   type="number"
-                  min={1}
+                  min={0}
                   value={dailyCallCap}
-                  onChange={(e) => setDailyCallCap(Number(e.target.value))}
+                  onChange={(e) => setDailyCallCap(Math.max(0, Number(e.target.value) || 0))}
                   className="bg-secondary border-border text-sm"
                 />
+                {/* 2026-09-24 (James) — min is 0, not 1, because 0 now means "no daily limit"
+                    rather than "never dial anyone". Same convention as Max Qualified Leads. */}
+                <p className="text-[11px] text-muted-foreground/70">
+                  {dailyCallCap > 0
+                    ? `Stops after ${dailyCallCap.toLocaleString()} lead${dailyCallCap === 1 ? "" : "s"} a day.`
+                    : "0 = no daily limit — it works through every lead."}
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Timezone (IANA)</Label>

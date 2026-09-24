@@ -301,6 +301,10 @@ export function buildCampaignInsertPayload(userId: string | undefined, newCampai
     agent_id: newCampaign.agentId || null,
     budget: newCampaign.budget || 0,
     max_qualified_leads: newCampaign.maxQualifiedLeads || 0,
+    // 2026-09-24 (James) — sent explicitly rather than left to the column default, so "what
+    // limit did this campaign get?" is answerable from this file alone. 0 = no daily limit
+    // (dispatch-batch treats <= 0 as unlimited, the same convention max_qualified_leads uses).
+    daily_call_cap: newCampaign.dailyCallCap ?? 0,
     crm_api_endpoint: newCampaign.crmApiEndpoint || "",
     work_hours: newCampaign.workHours || { days: ["Mon", "Tue", "Wed", "Thu", "Fri"], startTime: "09:00", endTime: "17:00" },
     // Call-quality plan §C.2 — THE load-bearing fix (E8): this insert used to omit `timezone`

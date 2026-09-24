@@ -312,15 +312,27 @@ serve(async (req) => {
         }
 
         if (!capRemaining.has(lead.campaign_id as string)) {
-          const { count: dialedToday, error: dialedError } = await supabase
-            .from('leads')
-            .select('id', { count: 'exact' })
-            .eq('campaign_id', lead.campaign_id as string)
-            .gte('last_called_at', startOfUtcDay)
-            .limit(1) // count comes from the Content-Range header, not the rows
-          if (dialedError) return jsonError(500, 'failed to compute daily cap', dialedError)
+          // 2026-09-24 (James) — daily_call_cap <= 0 means NO daily limit: the campaign works
+          // through its entire lead list, stopping only when the leads run out or
+          // max_qualified_leads is reached. Deliberately the same 0-means-unlimited convention
+          // max_qualified_leads already uses ~30 lines above, so there is one rule to remember
+          // here rather than two opposite ones. New campaigns now ship at 0
+          // (20260924000000_daily_cap_optional.sql); an explicit positive number still caps.
+          // Skipping the COUNT entirely (rather than comparing against Infinity) also drops one
+          // round-trip per campaign per tick on what is now the common path.
           const cap = campaign.daily_call_cap ?? DEFAULT_DAILY_CAP
-          capRemaining.set(lead.campaign_id as string, Math.max(0, cap - (dialedToday ?? 0)))
+          if (cap <= 0) {
+            capRemaining.set(lead.campaign_id as string, Number.POSITIVE_INFINITY)
+          } else {
+            const { count: dialedToday, error: dialedError } = await supabase
+              .from('leads')
+              .select('id', { count: 'exact' })
+              .eq('campaign_id', lead.campaign_id as string)
+              .gte('last_called_at', startOfUtcDay)
+              .limit(1) // count comes from the Content-Range header, not the rows
+            if (dialedError) return jsonError(500, 'failed to compute daily cap', dialedError)
+            capRemaining.set(lead.campaign_id as string, Math.max(0, cap - (dialedToday ?? 0)))
+          }
         }
 
         const remaining = capRemaining.get(lead.campaign_id as string) ?? 0

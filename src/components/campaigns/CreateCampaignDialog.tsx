@@ -169,7 +169,12 @@ const CreateCampaignDialog = ({ onCreated, agents }: CreateCampaignDialogProps) 
       budget: 0,
       leadsTotal: 0,
       leadCounts: { total: 0, queued: 0, dialing: 0, stalled: 0, called: 0, excluded: 0 },
-      dailyCallCap: 100,
+      // 2026-09-24 (James) — 0 means NO daily limit: a campaign works through its whole lead
+      // list, stopping only when the leads run out or Max Qualified Leads is reached. This is
+      // the optimistic value the card shows until the first refetch; the real one comes from
+      // buildCampaignInsertPayload below, which now sends it explicitly rather than leaning on
+      // the column default (the same hidden-default trap §C.2's timezone fix had to undo).
+      dailyCallCap: 0,
       // §C.2/§C.3 — the detected (or user-changed) zone, not a hardcoded "UTC". This is what
       // actually reaches the database now that useCampaigns.ts's createMutation inserts it.
       timezone,

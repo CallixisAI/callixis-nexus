@@ -51,8 +51,12 @@ const StartCampaignDialog = ({ campaign, onOpenChange, onConfirm, companyNameMis
         </DialogHeader>
         <div className="bg-secondary/50 rounded-lg p-4 border border-border space-y-2 text-sm">
           <p className="text-foreground">
-            This will call <span className="font-bold">{campaign.leadCounts.queued.toLocaleString()}</span> lead{campaign.leadCounts.queued === 1 ? "" : "s"},
-            up to <span className="font-bold">{campaign.dailyCallCap.toLocaleString()}</span>/day.
+            This will call <span className="font-bold">{campaign.leadCounts.queued.toLocaleString()}</span> lead{campaign.leadCounts.queued === 1 ? "" : "s"}
+            {/* 2026-09-24 (James) — a cap of 0 means no daily limit, so "up to 0/day" would be
+                the exact opposite of the truth. Say which of the two it is. */}
+            {campaign.dailyCallCap > 0
+              ? <>, up to <span className="font-bold">{campaign.dailyCallCap.toLocaleString()}</span>/day.</>
+              : <>, with <span className="font-bold">no daily limit</span>.</>}
           </p>
           <p className="text-muted-foreground text-xs">
             {campaign.workHours.days.length > 0 ? campaign.workHours.days.join(", ") : "No active days set"} · {campaign.workHours.startTime}–{campaign.workHours.endTime} ({campaign.timezone})
