@@ -34,6 +34,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { describeFunctionError } from "@/lib/functionError";
 import type { Database } from "@/integrations/supabase/types";
+import { CATEGORY_PROVIDERS, type ProviderOption } from "@/lib/providerSpecs";
 import {
   PLUGIN_REGISTRY,
   pluginById,
@@ -430,7 +431,7 @@ const Plugins = () => {
   const [setupTarget, setSetupTarget] = useState<PluginSpec | null>(null);
   const [addIntegrationOpen, setAddIntegrationOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>("voips");
-  const [newIntegrationName, setNewIntegrationName] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderOption | null>(null);
   const [newIntegrationFields, setNewIntegrationFields] = useState<Record<string, string>>({});
 
   const fetchPlugins = useCallback(async () => {
@@ -615,117 +616,129 @@ const Plugins = () => {
 
       {/* Add New Integration Dialog */}
       <Dialog open={addIntegrationOpen} onOpenChange={setAddIntegrationOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[550px]">
           <DialogHeader>
             <DialogTitle>Add New Integration</DialogTitle>
-            <DialogDescription>Choose an integration category and configure your new provider instantly.</DialogDescription>
+            <DialogDescription>
+              {!selectedProvider
+                ? "Step 1: Choose category and service provider."
+                : "Step 2: Fill in required configuration fields."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            <div>
-              <Label className="text-xs font-semibold uppercase text-muted-foreground">Category</Label>
-              <div className="grid grid-cols-3 gap-2 mt-2">
-                {[
-                  { id: "voips", label: "VoIP" },
-                  { id: "emails", label: "Emails" },
-                  { id: "calendar", label: "Calendar" },
-                  { id: "sms", label: "SMS" },
-                  { id: "whatsapp", label: "WhatsApp" },
-                ].map((cat) => (
-                  <Button
-                    key={cat.id}
-                    variant={selectedCategory === cat.id ? "default" : "outline"}
-                    className="text-xs"
-                    onClick={() => {
-                      setSelectedCategory(cat.id);
-                      setNewIntegrationFields({});
-                    }}
-                  >
-                    {cat.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Integration Name / Provider</Label>
-              <Input
-                placeholder={selectedCategory === "voips" ? "e.g. Retell AI, Bland AI, Twilio Voice" : "e.g. My Custom Provider"}
-                value={newIntegrationName}
-                onChange={(e) => setNewIntegrationName(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <Label className="text-xs font-semibold uppercase text-muted-foreground">Configuration Fields</Label>
-              {selectedCategory === "voips" && (
-                <>
-                  <div>
-                    <Label className="text-xs">API Key / Auth Token</Label>
-                    <Input
-                      type="password"
-                      placeholder="Enter provider API key"
-                      value={newIntegrationFields.apiKey || ""}
-                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Webhook URL / Endpoint</Label>
-                    <Input
-                      placeholder="https://api.yourprovider.com/v1/call"
-                      value={newIntegrationFields.webhookUrl || ""}
-                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, webhookUrl: e.target.value })}
-                    />
-                  </div>
-                </>
-              )}
-              {selectedCategory === "emails" && (
-                <>
-                  <div>
-                    <Label className="text-xs">SMTP Host / API Key</Label>
-                    <Input
-                      placeholder="smtp.provider.com or API Key"
-                      value={newIntegrationFields.apiKey || ""}
-                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Sender Email Address</Label>
-                    <Input
-                      placeholder="noreply@yourdomain.com"
-                      value={newIntegrationFields.senderEmail || ""}
-                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, senderEmail: e.target.value })}
-                    />
-                  </div>
-                </>
-              )}
-              {selectedCategory !== "voips" && selectedCategory !== "emails" && (
+            {!selectedProvider ? (
+              <>
                 <div>
-                  <Label className="text-xs">API Key / Access Token</Label>
-                  <Input
-                    placeholder="Enter API key or webhook URL"
-                    value={newIntegrationFields.apiKey || ""}
-                    onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
-                  />
+                  <Label className="text-xs font-semibold uppercase text-muted-foreground">1. Select Category</Label>
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    {[
+                      { id: "voips", label: "VoIP" },
+                      { id: "emails", label: "Emails" },
+                      { id: "calendar", label: "Calendar" },
+                      { id: "sms", label: "SMS" },
+                      { id: "whatsapp", label: "WhatsApp" },
+                    ].map((cat) => (
+                      <Button
+                        key={cat.id}
+                        variant={selectedCategory === cat.id ? "default" : "outline"}
+                        className="text-xs"
+                        onClick={() => {
+                          setSelectedCategory(cat.id);
+                          setSelectedProvider(null);
+                          setNewIntegrationFields({});
+                        }}
+                      >
+                        {cat.label}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
+
+                <div className="space-y-2 mt-4">
+                  <Label className="text-xs font-semibold uppercase text-muted-foreground">2. Select Service Provider</Label>
+                  <div className="grid grid-cols-1 gap-2 mt-1">
+                    {(CATEGORY_PROVIDERS[selectedCategory] || []).map((prov) => (
+                      <div
+                        key={prov.id}
+                        onClick={() => {
+                          setSelectedProvider(prov);
+                          setNewIntegrationFields({});
+                        }}
+                        className="p-3 border rounded-lg cursor-pointer hover:border-primary transition-all bg-card flex flex-col gap-1"
+                      >
+                        <div className="font-medium text-sm text-foreground">{prov.name}</div>
+                        <div className="text-xs text-muted-foreground">{prov.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between bg-secondary/50 p-3 rounded-lg">
+                  <div>
+                    <div className="text-xs text-muted-foreground uppercase font-semibold">Selected Provider</div>
+                    <div className="font-medium text-sm text-foreground">{selectedProvider.name}</div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => setSelectedProvider(null)}>Change</Button>
+                </div>
+
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase text-muted-foreground">Required Configuration Fields</Label>
+                  {selectedProvider.fields.map((field) => (
+                    <div key={field.key} className="space-y-1">
+                      <Label className="text-xs flex items-center justify-between">
+                        <span>{field.label} {field.required && <span className="text-destructive">*</span>}</span>
+                      </Label>
+                      <Input
+                        type={field.type === "password" ? "password" : "text"}
+                        placeholder={field.placeholder}
+                        value={newIntegrationFields[field.key] || ""}
+                        onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, [field.key]: e.target.value })}
+                      />
+                      {field.help && <p className="text-[11px] text-muted-foreground">{field.help}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddIntegrationOpen(false)}>Cancel</Button>
-            <Button
-              onClick={() => {
-                if (!newIntegrationName.trim()) {
-                  toast.error("Please enter an integration name.");
-                  return;
-                }
-                toast.success(`Successfully connected ${newIntegrationName} (${selectedCategory.toUpperCase()})!`);
-                setAddIntegrationOpen(false);
-                setNewIntegrationName("");
-                setNewIntegrationFields({});
-              }}
-            >
-              Save & Connect
-            </Button>
+            <Button variant="outline" onClick={() => { setAddIntegrationOpen(false); setSelectedProvider(null); }}>Cancel</Button>
+            {selectedProvider && (
+              <Button
+                onClick={async () => {
+                  // Validate mandatory fields
+                  for (const field of selectedProvider.fields) {
+                    if (field.required && !newIntegrationFields[field.key]?.trim()) {
+                      toast.error(`Please fill in mandatory field: ${field.label}`);
+                      return;
+                    }
+                  }
+                  if (!user) return;
+                  try {
+                    const pluginId = `${selectedCategory}-${selectedProvider.id}`;
+                    const { error } = await supabase.from("user_plugins").upsert({
+                      user_id: user.id,
+                      plugin_id: pluginId,
+                      status: "active",
+                      config: newIntegrationFields
+                    }, { onConflict: "user_id,plugin_id" });
+                    if (error) throw error;
+
+                    toast.success(`Successfully connected ${selectedProvider.name}!`);
+                    setAddIntegrationOpen(false);
+                    setSelectedProvider(null);
+                    setNewIntegrationFields({});
+                    fetchPlugins();
+                  } catch (err) {
+                    toast.error(errorMessage(err));
+                  }
+                }}
+              >
+                Save & Connect
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
