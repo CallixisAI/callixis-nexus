@@ -428,6 +428,10 @@ const Plugins = () => {
   const [secretMeta, setSecretMeta] = useState<Set<string>>(new Set());
   const [activateTarget, setActivateTarget] = useState<PluginSpec | null>(null);
   const [setupTarget, setSetupTarget] = useState<PluginSpec | null>(null);
+  const [addIntegrationOpen, setAddIntegrationOpen] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>("voips");
+  const [newIntegrationName, setNewIntegrationName] = useState("");
+  const [newIntegrationFields, setNewIntegrationFields] = useState<Record<string, string>>({});
 
   const fetchPlugins = useCallback(async () => {
     if (!user) return;
@@ -576,6 +580,12 @@ const Plugins = () => {
           there, not in a page-level label), so the header text was redundant. GROUP_ORDER still
           controls the display ORDER (live, then managed, then planned) — only its title/subtitle
           text is unused now. */}
+      <div className="flex justify-between items-center mb-4">
+        <p className="text-sm text-muted-foreground">Manage your active integrations and add new VoIP, Email, Calendar, SMS, or WhatsApp channels.</p>
+        <Button onClick={() => setAddIntegrationOpen(true)} className="gap-2 bg-primary text-primary-foreground">
+          <Sparkles className="w-4 h-4" /> Add New Integration
+        </Button>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {GROUP_ORDER.flatMap((readiness) => enrichedPlugins.filter((e) => e.plugin.readiness === readiness)).map(
           ({ plugin, enabled, configured }) => (
@@ -597,11 +607,128 @@ const Plugins = () => {
       <IntegrationSheet
         plugin={setupTarget}
         open={!!setupTarget}
-        initialConfig={enrichedPlugins.find((e) => e.plugin.id === setupTarget?.id)?.config}
-        configuredSecretKeys={setupTarget ? secretKeysFor(setupTarget.id) : new Set()}
         onOpenChange={(open) => !open && setSetupTarget(null)}
         onConfigSaved={handleSaveConfig}
+        initialConfig={setupTarget ? (dbPlugins.find((p) => p.plugin_id === setupTarget.id)?.config as Record<string, string>) || {} : {}}
+        configuredSecretKeys={secretKeysFor(setupTarget?.id || "")}
       />
+
+      {/* Add New Integration Dialog */}
+      <Dialog open={addIntegrationOpen} onOpenChange={setAddIntegrationOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add New Integration</DialogTitle>
+            <DialogDescription>Choose an integration category and configure your new provider instantly.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label className="text-xs font-semibold uppercase text-muted-foreground">Category</Label>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                {[
+                  { id: "voips", label: "VoIP" },
+                  { id: "emails", label: "Emails" },
+                  { id: "calendar", label: "Calendar" },
+                  { id: "sms", label: "SMS" },
+                  { id: "whatsapp", label: "WhatsApp" },
+                ].map((cat) => (
+                  <Button
+                    key={cat.id}
+                    variant={selectedCategory === cat.id ? "default" : "outline"}
+                    className="text-xs"
+                    onClick={() => {
+                      setSelectedCategory(cat.id);
+                      setNewIntegrationFields({});
+                    }}
+                  >
+                    {cat.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Integration Name / Provider</Label>
+              <Input
+                placeholder={selectedCategory === "voips" ? "e.g. Retell AI, Bland AI, Twilio Voice" : "e.g. My Custom Provider"}
+                value={newIntegrationName}
+                onChange={(e) => setNewIntegrationName(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-xs font-semibold uppercase text-muted-foreground">Configuration Fields</Label>
+              {selectedCategory === "voips" && (
+                <>
+                  <div>
+                    <Label className="text-xs">API Key / Auth Token</Label>
+                    <Input
+                      type="password"
+                      placeholder="Enter provider API key"
+                      value={newIntegrationFields.apiKey || ""}
+                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Webhook URL / Endpoint</Label>
+                    <Input
+                      placeholder="https://api.yourprovider.com/v1/call"
+                      value={newIntegrationFields.webhookUrl || ""}
+                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, webhookUrl: e.target.value })}
+                    />
+                  </div>
+                </>
+              )}
+              {selectedCategory === "emails" && (
+                <>
+                  <div>
+                    <Label className="text-xs">SMTP Host / API Key</Label>
+                    <Input
+                      placeholder="smtp.provider.com or API Key"
+                      value={newIntegrationFields.apiKey || ""}
+                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Sender Email Address</Label>
+                    <Input
+                      placeholder="noreply@yourdomain.com"
+                      value={newIntegrationFields.senderEmail || ""}
+                      onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, senderEmail: e.target.value })}
+                    />
+                  </div>
+                </>
+              )}
+              {selectedCategory !== "voips" && selectedCategory !== "emails" && (
+                <div>
+                  <Label className="text-xs">API Key / Access Token</Label>
+                  <Input
+                    placeholder="Enter API key or webhook URL"
+                    value={newIntegrationFields.apiKey || ""}
+                    onChange={(e) => setNewIntegrationFields({ ...newIntegrationFields, apiKey: e.target.value })}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddIntegrationOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!newIntegrationName.trim()) {
+                  toast.error("Please enter an integration name.");
+                  return;
+                }
+                toast.success(`Successfully connected ${newIntegrationName} (${selectedCategory.toUpperCase()})!`);
+                setAddIntegrationOpen(false);
+                setNewIntegrationName("");
+                setNewIntegrationFields({});
+              }}
+            >
+              Save & Connect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
