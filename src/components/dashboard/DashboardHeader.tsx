@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TimeframeFilter, type TimeframePreset } from "@/components/TimeframeFilter";
 import { ENGINE_STATUS_LABEL, type EngineStatus } from "@/lib/callPipeline";
+import { DemoModeToggle } from "@/components/DemoModeToggle";
 
 // Dashboard tiles plan §G — the chrome. §G.1: the hero header stays pinned — not a tile, not
 // removable, outside DndContext. It holds TimeframeFilter (the page's only data control), the
@@ -73,6 +74,7 @@ export function DashboardHeader({
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
+          <DemoModeToggle />
           {isCustomizing && (
             <>
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
