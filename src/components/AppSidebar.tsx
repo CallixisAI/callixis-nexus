@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { Globe, LogOut } from "lucide-react";
+import { Globe, LogOut, Sparkles } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { APP_PERMISSIONS } from "@/lib/permissions";
+import { seedDemoAccount } from "@/lib/seedDemo";
 import callixisLogo from "@/assets/callixis-logo.png";
 
 import {
@@ -21,7 +22,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const navigate = useNavigate();
-  const { signOut, profile, role, hasPermission } = useAuth();
+  const { signOut, profile, role, hasPermission, user } = useAuth();
 
   const [gmtTime, setGmtTime] = useState("");
 
@@ -96,6 +97,19 @@ export function AppSidebar() {
             <div className="mb-3 px-2">
               <p className="text-xs font-medium text-foreground truncate">{profile?.full_name || "User"}</p>
               <p className="text-[10px] text-muted-foreground capitalize">{role || "—"}</p>
+              {(role === "super_admin" || role === "admin") && (
+                <button
+                  onClick={async () => {
+                    if (user) {
+                      await seedDemoAccount(user.id);
+                      window.location.reload();
+                    }
+                  }}
+                  className="mt-2 w-full py-1 text-[11px] bg-primary/10 text-primary rounded hover:bg-primary/20 transition-colors font-medium flex items-center justify-center gap-1"
+                >
+                  <Sparkles className="h-3 w-3" /> Load Demo Data
+                </button>
+              )}
             </div>
           )}
           <button
