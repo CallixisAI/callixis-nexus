@@ -44,6 +44,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { RolesTab } from "@/components/admin/RolesTab";
 import { SecurityTab } from "@/components/admin/SecurityTab";
 import { AuditTab } from "@/components/admin/AuditTab";
+import AdminScanner from "@/components/admin/AdminScanner";
 import { VapiAssistantsTab } from "@/components/admin/VapiAssistantsTab";
 import { AssignRoleSelect } from "@/components/admin/AssignRoleSelect";
 import { useRoleCatalogue, useActorRoleInfo, useRolePermissionMatrix } from "@/hooks/useRoles";
@@ -381,7 +382,7 @@ const Admin = () => {
         </TabsList>
 
         <TabsContent value="users" className="space-y-6 pt-4">
-      <div className="flex flex-col md:flex-row md:items-center justify-end gap-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-end gap-4">
         <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
           <DialogTrigger asChild>
             <Button className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-11 px-6 shadow-lg shadow-primary/20 transition-all active:scale-95">
@@ -659,6 +660,10 @@ const Admin = () => {
           </table>
         </div>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="scanner" className="pt-4">
+          <AdminScanner />
         </TabsContent>
 
         {canSeeRolesTab && (
