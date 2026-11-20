@@ -1,15 +1,15 @@
 import { useState, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Copy, RefreshCcw, Key } from "lucide-react";
+import { RefreshCcw, Database, User, ShieldCheck } from "lucide-react";
+
+const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbw0IWizKtOi-2yf8-25Aq4ABIXW1kggQH7oKiilGZRfvDatmpNTi3MsqFPkbIh6IHcw/exec";
 
 export default function AdminScanner() {
   const [gifts, setGifts] = useState<any[]>([]);
-  const [scannerKey, setScannerKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,97 +18,94 @@ export default function AdminScanner() {
 
   const fetchData = async () => {
     setLoading(true);
-    // Get the first scanner key
-    const { data: keys } = await supabase.from('scanner_keys').select('key').limit(1);
-    if (keys && keys.length > 0) {
-      setScannerKey(keys[0].key);
-    }
-
-    // Get the gift history
-    const { data: giftsData, error } = await supabase
-      .from('scanned_gifts')
-      .select('*')
-      .order('scanned_at', { ascending: false })
-      .limit(50);
-
-    if (error) {
-      toast.error("Failed to load scanner data");
-    } else {
-      setGifts(giftsData || []);
-    }
-    setLoading(false);
-  };
-
-  const copyKey = () => {
-    if (scannerKey) {
-      navigator.clipboard.writeText(scannerKey);
-      toast.success("Scanner key copied to clipboard");
+    try {
+      const response = await fetch(GOOGLE_SHEET_URL);
+      const data = await response.json();
+      setGifts(data);
+    } catch (error) {
+      console.error("Failed to fetch:", error);
+      toast.error("Could not load scanner data from Google Sheets");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-bold tracking-tight">Chest Scanner</h2>
-        <Button onClick={fetchData} variant="outline" size="sm">
-          <RefreshCcw className="mr-2 h-4 w-4" />
-          Refresh
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Clan Chest Logs</h2>
+          <p className="text-muted-foreground mt-1">Real-time scans from Total Battle via Google Sheets</p>
+        </div>
+        <Button onClick={fetchData} variant="outline" size="sm" disabled={loading}>
+          <RefreshCcw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh Data
         </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card className="bg-primary/5 border-primary/20 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Scanner Key</CardTitle>
-            <Key className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Total Scans</CardTitle>
+            <Database className="h-4 w-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="flex items-center space-x-2">
-              <code className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold truncate max-w-[200px]">
-                {scannerKey || "No key generated"}
-              </code>
-              <Button size="icon" variant="ghost" onClick={copyKey}>
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              Paste this into your browser script settings.
-            </p>
+            <div className="text-2xl font-bold">{gifts.length}</div>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Scan History</CardTitle>
+      <Card className="border-border/60 shadow-md overflow-hidden">
+        <CardHeader className="bg-muted/30 border-b">
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            Live Scan History
+          </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           <Table>
-            <TableHeader>
+            <TableHeader className="bg-muted/50">
               <TableRow>
+                <TableHead className="w-[180px]">Scan Time</TableHead>
                 <TableHead>Player</TableHead>
-                <TableHead>Chest/Gift</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Time</TableHead>
+                <TableHead>Chest/Gift Name</TableHead>
+                <TableHead className="text-center">Lvl</TableHead>
+                <TableHead className="text-center">Crypt</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {gifts.length === 0 ? (
+              {loading ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                    No scans recorded yet. Open the game's Gift page to start scanning.
+                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground italic">
+                    Connecting to Google Sheets...
+                  </TableCell>
+                </TableRow>
+              ) : gifts.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    No scan data found. Make sure the scanner is running on your PC.
                   </TableCell>
                 </TableRow>
               ) : (
-                gifts.map((gift) => (
-                  <TableRow key={gift.id}>
-                    <TableCell className="font-medium">{gift.player_name}</TableCell>
-                    <TableCell>{gift.gift_name}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{gift.amount}</Badge>
+                gifts.map((gift, idx) => (
+                  <TableRow key={idx} className="hover:bg-muted/30 transition-colors">
+                    <TableCell className="text-xs font-mono text-muted-foreground">
+                      {new Date(gift.time).toLocaleString()}
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {new Date(gift.scanned_at).toLocaleString()}
+                    <TableCell className="font-semibold flex items-center gap-2">
+                      <User className="h-3 w-3 text-muted-foreground" />
+                      {gift.player}
+                    </TableCell>
+                    <TableCell>{gift.chest}</TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/20">
+                        {gift.level || '1'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                        {gift.crypt || '0'}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))
